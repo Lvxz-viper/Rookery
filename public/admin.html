@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex"><meta name="theme-color" content="#131a16">
+<title>Rookery Control Room</title>
+<link rel="icon" href="icons/icon-192.png">
+<style>
+@font-face{font-family:"Bodoni Moda";src:url(fonts/bodoni-moda.woff2) format("woff2");font-weight:400 900;font-display:swap}
+@font-face{font-family:"Onest";src:url(fonts/onest-400.woff2) format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Onest";src:url(fonts/onest-500.woff2) format("woff2");font-weight:500;font-display:swap}
+@font-face{font-family:"Onest";src:url(fonts/onest-600.woff2) format("woff2");font-weight:600;font-display:swap}
+/* Control room: the club's felt and brass, denser and built for scanning. Left-aligned, tabbed. */
+:root{--felt:#131a16;--felt2:#18211c;--baize:#1d2722;--baize2:#243029;--baize3:#2c3a32;--line:#2c3831;--line2:#3a4840;--bone:#ece6d6;--bone2:#d9d2bf;--muted:#9ba79c;--dim:#6c786f;--brass:#c9a45c;--brass2:#e0c389;--ink:#22190a;--win:#80b98c;--loss:#d47a66;--info:#7aa3c9;
+  --serif:"Bodoni Moda",Georgia,serif;--sans:"Onest",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{background:var(--felt)}
+body{margin:0;color:var(--bone);font:400 14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+input,textarea,select{font:inherit;color:var(--bone);background:var(--felt2);border:1px solid var(--line2);border-radius:7px;padding:9px 11px;width:100%}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--brass)}
+:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+a{color:inherit}
+.wrap{max-width:1320px;margin:0 auto;padding-block:24px 60px;padding-left:max(20px,env(safe-area-inset-left,0px));padding-right:max(20px,env(safe-area-inset-right,0px))}
+header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+header svg{width:30px;height:30px;color:var(--brass);flex:none}
+header h1{font:500 34px/1 var(--serif);margin:0;flex:1;min-width:0}
+header small{color:var(--muted)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto;scrollbar-width:none}
+.tabs button{padding:10px 14px 12px;color:var(--muted);font-weight:500;position:relative;white-space:nowrap}
+.tabs button.on{color:var(--bone)}
+.tabs button.on::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;background:var(--brass);border-radius:2px}
+.tabs .n{margin-left:6px;background:var(--brass);color:var(--ink);border-radius:9px;font-size:11px;font-weight:700;padding:1px 6px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:8px 13px;border-radius:7px;background:var(--baize2);border:1px solid var(--line2);font-weight:500;font-size:13.5px;white-space:nowrap;text-decoration:none;color:var(--bone);transition:background .15s}
+.btn:hover{background:var(--baize3)}
+.btn.pri{background:var(--bone);color:#18201b;border-color:transparent;font-weight:600}
+.btn.brass{background:var(--brass);color:var(--ink);border-color:transparent;font-weight:600}
+.btn.bad{background:rgba(212,122,102,.14);border-color:rgba(212,122,102,.4);color:#f1ab9b}
+.btn.sm{padding:4px 9px;font-size:12.5px}
+.btn[disabled]{opacity:.4;pointer-events:none}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.card{background:var(--felt2);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+.kpi small{color:var(--muted);font-size:13px;display:block}
+.kpi b{font:500 34px/1.1 var(--serif);font-variant-numeric:lining-nums tabular-nums;display:block;margin:4px 0 2px}
+.kpi span{font-size:12.5px;color:var(--dim)}
+.meter{height:6px;border-radius:3px;background:var(--baize2);overflow:hidden;margin-top:10px}
+.meter i{display:block;height:100%;background:var(--brass);border-radius:3px}
+.meter i.hot{background:var(--loss)}
+.spark{width:100%;height:46px;display:block;margin-top:8px}
+.cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px;margin-top:16px;align-items:start}
+.stack{display:grid;gap:16px;align-content:start}
+h2{font:600 16px var(--sans);margin:0 0 12px;display:flex;align-items:center;gap:10px}
+h2 .n{color:var(--muted);font-weight:500}
+h2 .sp{flex:1}
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.tbl th{text-align:left;font-weight:500;color:var(--dim);font-size:12.5px;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle;font-variant-numeric:tabular-nums}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tr.clk{cursor:pointer}
+.tbl tr.clk:hover td{background:var(--baize)}
+.tbl .acts{display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap}
+.scroll{overflow-x:auto}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:600;background:var(--baize2);color:var(--muted);white-space:nowrap}
+.pill.on{background:rgba(128,185,140,.16);color:var(--win)}
+.pill.play{background:rgba(201,164,92,.16);color:var(--brass2)}
+.pill.bad{background:rgba(212,122,102,.16);color:var(--loss)}
+.ttl{display:inline-block;font:700 10.5px/1 var(--sans);color:var(--ink);background:var(--brass);padding:3px 5px 2px;border-radius:3px;margin-right:6px;vertical-align:1px}
+.empty{color:var(--dim);padding:10px 0;margin:0}
+.note{color:var(--muted);font-size:13px;margin:0}
+.fine{color:var(--dim);font-size:12.5px;margin:0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>input,.row>select{flex:1;min-width:0;width:auto}
+.login{max-width:380px;margin:12vh auto 0;display:grid;gap:12px}
+.login h1{font:500 40px/1 var(--serif);margin:0 0 6px}
+.err{color:#f1ab9b;min-height:20px;font-size:13.5px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--baize2);border:1px solid var(--line2);padding:10px 16px;border-radius:8px;font-weight:500;z-index:99;box-shadow:0 14px 34px -10px rgba(0,0,0,.6);max-width:calc(100% - 32px)}
+.live{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.mini{display:grid;grid-template:repeat(8,1fr)/repeat(8,1fr);aspect-ratio:1;width:100%;border-radius:3px;overflow:hidden;margin:10px 0}
+.mini i{background:#e7d6b8;display:grid;place-items:center;font-style:normal;font-size:clamp(14px,2.6vw,24px);line-height:1}
+.mini i.d{background:#a57d58}
+.mini i.l{box-shadow:inset 0 0 0 999px rgba(212,170,80,.42)}
+.mini .w{color:#fff;text-shadow:0 0 1px #000,0 0 1px #000,0 1px 1px #000}
+.mini .b{color:#1b1612}
+.pl{display:flex;justify-content:space-between;gap:8px;font-size:13.5px}
+.pl b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl span{color:var(--muted);font-variant-numeric:tabular-nums}
+.bars{display:grid;grid-template-columns:repeat(14,1fr);gap:4px;align-items:end;height:120px;margin-top:6px}
+.bars div{display:flex;flex-direction:column;justify-content:flex-end;gap:2px;height:100%;position:relative}
+.bars i{display:block;background:var(--brass);border-radius:2px 2px 0 0;min-height:2px}
+.bars i.s{background:var(--info)}
+.bars small{position:absolute;bottom:-18px;left:0;right:0;text-align:center;font-size:10.5px;color:var(--dim)}
+.legend{display:flex;gap:14px;font-size:12.5px;color:var(--muted);margin-top:26px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--brass);margin-right:6px;vertical-align:-1px}
+.legend i.s{background:var(--info)}
+.set{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--line)}
+.set:last-child{border-bottom:0}
+.set div{flex:1;min-width:0}
+.set b{display:block;font-weight:500}
+.set small{color:var(--muted);font-size:13px}
+.tog{width:40px;height:23px;border-radius:12px;background:var(--baize3);position:relative;flex:none;transition:background .2s}
+.tog::after{content:"";position:absolute;left:3px;top:3px;width:17px;height:17px;border-radius:50%;background:var(--muted);transition:transform .2s,background .2s}
+.tog.on{background:var(--brass)}
+.tog.on::after{transform:translateX(17px);background:var(--ink)}
+.tog.warn.on{background:var(--loss)}
+.chatline{display:grid;grid-template-columns:auto 1fr auto;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px;align-items:baseline}
+.chatline:last-child{border-bottom:0}
+.chatline time{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.chatline b{font-weight:600;cursor:pointer}
+.chatline b:hover{color:var(--brass2)}
+.chatline span{overflow-wrap:anywhere}
+.rep{border-bottom:1px solid var(--line);padding:12px 0;display:grid;gap:8px}
+.rep:last-child{border-bottom:0}
+.rep .chat{background:var(--baize);border-radius:7px;padding:8px 10px;font-size:12.5px;max-height:160px;overflow:auto;color:var(--muted)}
+.rep .chat b{color:var(--bone);font-weight:500}
+.scrim{position:fixed;inset:0;background:rgba(8,12,10,.6);z-index:50;display:flex;justify-content:flex-end}
+.drawer{width:min(560px,100%);height:100%;overflow:auto;background:var(--felt2);border-left:1px solid var(--line2);padding:22px 22px 40px;animation:slide .25s cubic-bezier(.2,.8,.2,1)}
+@keyframes slide{from{transform:translateX(30px);opacity:0}to{transform:none;opacity:1}}
+.drawer h3{font:500 30px/1.1 var(--serif);margin:0}
+.drawer .x{float:right;width:34px;height:34px;border-radius:7px;color:var(--muted);font-size:20px}
+.drawer .x:hover{background:var(--baize)}
+.drawer section{margin-top:22px;display:grid;gap:10px}
+.drawer h4{margin:0;font-size:14px;font-weight:600;color:var(--muted)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0;font-size:13.5px}
+dt{color:var(--muted)}dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.rgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.rgrid label{display:grid;gap:4px;font-size:12.5px;color:var(--muted)}
+.rgrid input{padding:7px 9px}
+.temp{font:600 20px/1.2 var(--sans);letter-spacing:.06em;color:var(--brass2);background:var(--baize);padding:10px 12px;border-radius:7px;user-select:all}
+@media (max-width:980px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cols{grid-template-columns:1fr}}
+@media (max-width:520px){.grid{gap:8px}.kpi b{font-size:26px}header h1{font-size:28px}.rgrid{grid-template-columns:1fr 1fr}.hide-sm{display:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body>
+<div class="wrap" id="app"></div>
+<script>
+(function(){
+'use strict';
+var tok=null;try{tok=sessionStorage.getItem('rk-admin');}catch(e){}
+var app=document.getElementById('app'),D=null,players=[],gamesRows=null,q='',gq='',tab='overview',timer=null,drawerId=null,armed=null;
+try{tab=sessionStorage.getItem('rk-tab')||'overview';}catch(e){}
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+var rook='<svg viewBox="0 0 40 40" fill="currentColor" aria-hidden="true"><path d="M9 35h22l-1.6-4.2H10.6z"/><path d="M12.2 30.8 13.6 16h12.8l1.4 14.8z" opacity=".88"/><path d="M10 6h4.2v3.6h3.2V6h5.2v3.6h3.2V6H30v6.6l-2.6 2.2H12.6L10 12.6z"/></svg>';
+function toast(m){var o=document.querySelector('.toast');if(o)o.remove();var d=document.createElement('div');d.className='toast';d.textContent=m;document.body.appendChild(d);setTimeout(function(){d.remove();},2600);}
+function api(path,body){return fetch('api/admin/'+path,{method:body?'POST':'GET',headers:Object.assign({'Content-Type':'application/json'},tok?{Authorization:'Bearer '+tok}:{}),body:body?JSON.stringify(body):undefined})
+  .then(function(r){return r.json().then(function(j){if(r.status===401&&path!=='login'){logout();throw new Error('Signed out');}if(!r.ok)throw new Error(j.error||'Request failed');return j;});});}
+function logout(){tok=null;try{sessionStorage.removeItem('rk-admin');}catch(e){}clearInterval(timer);loginView();}
+function bytes(n){if(n==null)return '–';var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<4){n/=1024;i++;}return n.toFixed(n<10&&i?1:0)+' '+u[i];}
+function dur(s){s=Math.floor(s);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?d+'d '+h+'h':h?h+'h '+m+'m':m+'m';}
+function ago(ts){if(!ts)return '–';var s=(Date.now()-ts)/1000;if(s<60)return 'just now';if(s<3600)return Math.floor(s/60)+' min ago';if(s<86400)return Math.floor(s/3600)+' h ago';return Math.floor(s/86400)+' d ago';}
+function clock(ms){ms=Math.max(0,ms||0);var t=Math.ceil(ms/1000);return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
+function ttl(t){return t?'<span class="ttl">'+esc(t)+'</span>':'';}
+function spark(arr,key,max,color){if(!arr||arr.length<2)return '<svg class="spark"></svg>';var W=240,H=46,n=arr.length;
+  var pts=arr.map(function(s,i){return [i/(n-1)*W,H-2-Math.min(1,s[key]/max)*(H-6)];});
+  var l=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
+  return '<svg class="spark" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" aria-hidden="true"><path d="'+l+' L'+W+' '+H+' L0 '+H+' Z" fill="'+color+'" opacity=".14"/><path d="'+l+'" fill="none" stroke="'+color+'" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>';}
+var GLY={P:'♙',N:'♘',B:'♗',R:'♖',Q:'♕',K:'♔',p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
+function mini(fen,last){var rows=fen.split(' ')[0].split('/'),h='',ls=[];if(last){ls=[last.slice(0,2),last.slice(2,4)];}
+  for(var r=0;r<8;r++){var c=0;for(var i=0;i<rows[r].length;i++){var ch=rows[r][i];if(/\d/.test(ch)){for(var k=0;k<+ch;k++){h+=sq(r,c,'');c++;}}else{h+=sq(r,c,ch);c++;}}}
+  function sq(r,c,p){var nm='abcdefgh'[c]+(8-r);return '<i class="'+((r+c)%2?'d':'')+(ls.indexOf(nm)>=0?' l':'')+'">'+(p?'<span class="'+(p===p.toUpperCase()?'w':'b')+'">'+GLY[p.toLowerCase()]+'</span>':'')+'</i>';}
+  return '<div class="mini" aria-hidden="true">'+h+'</div>';}
+
+function loginView(){app.innerHTML='<form class="login" id="lf"><div style="color:var(--brass);width:40px">'+rook+'</div><h1>Control room</h1><p class="note">Sign in with the admin password. On first start it is saved in <b>data\\ADMIN-PASSWORD.txt</b> inside your server folder.</p><input id="pw" type="password" autocomplete="current-password" placeholder="Admin password" aria-label="Admin password" required><div class="err" id="err"></div><button class="btn pri" type="submit" style="padding:11px">Sign in</button></form>';
+  document.getElementById('lf').onsubmit=function(e){e.preventDefault();api('login',{password:document.getElementById('pw').value}).then(function(r){tok=r.token;try{sessionStorage.setItem('rk-admin',tok);}catch(er){}start();}).catch(function(er){document.getElementById('err').textContent=er.message;});};
+  document.getElementById('pw').focus();}
+function start(){refresh(true);loadPlayers();clearInterval(timer);timer=setInterval(function(){if(!document.hidden)refresh();},5000);}
+function refresh(first){api('overview').then(function(d){D=d;if(first||!busy())render();else renderHead();}).catch(function(){});}
+function busy(){var a=document.activeElement;return a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)&&app.contains(a);}
+function loadPlayers(){api('players?q='+encodeURIComponent(q)).then(function(d){players=d.rows;if(tab==='players')render();}).catch(function(){});}
+function loadGames(){api('games?q='+encodeURIComponent(gq)).then(function(d){gamesRows=d.rows;if(tab==='games')render();}).catch(function(){});}
+function setTab(t){tab=t;try{sessionStorage.setItem('rk-tab',t);}catch(e){}if(t==='games'&&!gamesRows)loadGames();if(t==='players')loadPlayers();render();}
+
+function renderHead(){var h=document.getElementById('tabsbar');if(h)h.innerHTML=tabsHTML();}
+function tabsHTML(){var c=D.counts;return [['overview','Overview'],['live','Live games',c.playing],['players','Players'],['games','Games'],['chat','Chat'],['reports','Reports',c.reports],['server','Server']].map(function(t){return '<button class="'+(tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[2]?'<span class="n">'+t[2]+'</span>':'')+'</button>';}).join('');}
+function render(){if(!D)return;
+  var html='<header>'+rook+'<h1>Control room</h1><small>Rookery '+esc(D.version)+(D.settings.maintenance?' <span class="pill bad">Maintenance on</span>':'')+'</small><a class="btn" href="./" target="_blank" rel="noopener">Open Rookery</a><button class="btn" data-act="logout">Sign out</button></header><nav class="tabs" id="tabsbar">'+tabsHTML()+'</nav>';
+  html+='<main>'+({overview:overview,live:live,players:playersTab,games:gamesTab,chat:chatTab,reports:reportsTab,server:serverTab}[tab]||overview)()+'</main>';
+  app.innerHTML=html;}
+function kpi(l,v,s){return '<div class="card kpi"><small>'+l+'</small><b>'+v+'</b><span>'+s+'</span></div>';}
+function overview(){var d=D,s=d.samples,last=s[s.length-1]||{cpu:0},memUsed=d.memTotal-d.memFree,disk=d.disk;
+  var act=d.activity,mx=Math.max(1,Math.max.apply(null,act.map(function(a){return Math.max(a.games,a.signups);})));
+  var bars='<div class="bars">'+act.map(function(a){var dt=new Date(a.day);return '<div title="'+dt.toDateString()+': '+a.games+' games, '+a.signups+' new accounts"><i style="height:'+(a.games/mx*100)+'%"></i><i class="s" style="height:'+(a.signups/mx*100)+'%"></i><small>'+dt.getDate()+'</small></div>';}).join('')+'</div><div class="legend"><span><i></i>Games</span><span><i class="s"></i>New accounts</span></div>';
+  return '<div class="grid">'+kpi('Online now',d.counts.online,d.counts.playing+' playing, '+d.counts.queued+' searching, '+d.counts.spect+' watching')+kpi('Accounts',d.counts.accounts,d.counts.guests+' guests, '+d.counts.banned+' suspended')+kpi('Games played',d.counts.games,d.counts.gamesToday+' today')+kpi('Open reports',d.counts.reports,d.counts.reports?'Waiting for you':'Nothing to review')+'</div>'+
+   '<div class="grid" style="margin-top:12px">'+
+   '<div class="card kpi"><small>Processor</small><b>'+last.cpu.toFixed(0)+'%</b><span>'+d.cores+' cores</span>'+spark(s,'cpu',100,'#c9a45c')+'</div>'+
+   '<div class="card kpi"><small>Memory</small><b>'+bytes(memUsed)+'</b><span>of '+bytes(d.memTotal)+', Rookery uses '+bytes(d.rss)+'</span>'+spark(s,'mem',100,'#7aa3c9')+'</div>'+
+   '<div class="card kpi"><small>Disk</small><b>'+(disk?bytes(disk.free):'–')+'</b><span>free of '+(disk?bytes(disk.total):'–')+'</span><div class="meter"><i class="'+(disk&&(disk.total-disk.free)/disk.total>.9?'hot':'')+'" style="width:'+(disk?((disk.total-disk.free)/disk.total*100).toFixed(1):0)+'%"></i></div></div>'+
+   '<div class="card kpi"><small>Running for</small><b>'+dur(d.procUptime)+'</b><span>Computer on for '+dur(d.uptime)+'</span>'+spark(s,'online',Math.max(4,Math.max.apply(null,s.map(function(x){return x.online;}))),'#80b98c')+'</div></div>'+
+   '<div class="cols"><div class="card"><h2>Last 14 days</h2>'+bars+'</div><div class="card"><h2>Recent activity<span class="sp"></span><button class="btn sm" data-tab="server">Full log</button></h2>'+auditList(d.audit.slice(0,8))+'</div></div>';}
+function auditList(a){return a.length?'<table class="tbl"><tbody>'+a.map(function(x){return '<tr><td>'+esc(x.action)+(x.detail?' <span style="color:var(--muted)">'+esc(x.detail)+'</span>':'')+'</td><td style="text-align:right;color:var(--dim);white-space:nowrap">'+ago(x.ts)+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">Nothing yet.</p>';}
+function live(){var L=D.live;if(!L.length)return '<div class="card"><p class="empty">No games right now. Live games show up here with the position, the clocks and a button to watch.</p></div>';
+  return '<div class="live">'+L.map(function(g){return '<div class="card"><div class="pl"><b>'+ttl(g.black.title)+esc(g.black.name)+' <span>'+g.black.rating+'</span></b><span>'+(g.tc!=='none'?clock(g.clock[1]):'')+'</span></div>'+mini(g.fen,g.last)+'<div class="pl"><b>'+ttl(g.white.title)+esc(g.white.name)+' <span>'+g.white.rating+'</span></b><span>'+(g.tc!=='none'?clock(g.clock[0]):'')+'</span></div>'+
+    '<p class="fine" style="margin:8px 0 10px">'+esc(g.tc)+(g.rated?' rated':' casual')+', move '+Math.ceil(g.n/2)+', '+g.spect+' watching</p>'+
+    '<div class="row"><a class="btn pri sm" href="./?watch='+g.gid+'#watch" target="_blank" rel="noopener">Watch</a><button class="btn sm" data-end="'+g.gid+'" data-r="aborted" data-confirm="Abort this game? Ratings stay the same.">Abort</button></div>'+
+    '<div class="row" style="margin-top:6px"><button class="btn sm" data-end="'+g.gid+'" data-r="1-0" data-confirm="Give the win to White?">White wins</button><button class="btn sm" data-end="'+g.gid+'" data-r="0-1" data-confirm="Give the win to Black?">Black wins</button><button class="btn sm" data-end="'+g.gid+'" data-r="1/2-1/2" data-confirm="Declare a draw?">Draw</button></div></div>';}).join('')+'</div>';}
+function playersTab(){
+  return '<div class="card"><h2>Players<span class="n">'+players.length+(players.length>=150?'+':'')+'</span></h2><form class="row" data-form="psearch" style="margin-bottom:12px"><input id="pq" placeholder="Search by name, id or network address" value="'+esc(q)+'" aria-label="Search players"><button class="btn" type="submit">Search</button></form>'+
+   (players.length?'<div class="scroll"><table class="tbl"><thead><tr><th>Name</th><th>Status</th><th>Bullet</th><th>Blitz</th><th>Rapid</th><th class="hide-sm">Games</th><th class="hide-sm">Last seen</th></tr></thead><tbody>'+players.map(function(p){
+    var st=p.banned?'<span class="pill bad">'+(p.banUntil?'Suspended until '+new Date(p.banUntil).toLocaleDateString():'Suspended')+'</span>':p.playing?'<span class="pill play">Playing</span>':p.online?'<span class="pill on">Online</span>':'<span class="pill">Offline</span>';
+    return '<tr class="clk" data-player="'+p.id+'"><td>'+ttl(p.title)+esc(p.name)+(p.guest?' <span class="pill">Guest</span>':'')+(p.muted?' <span class="pill bad">Chat off</span>':'')+'</td><td>'+st+'</td><td>'+p.ratings.bullet+'</td><td>'+p.ratings.blitz+'</td><td>'+p.ratings.rapid+'</td><td class="hide-sm">'+p.games+'</td><td class="hide-sm">'+ago(p.seen||p.created)+'</td></tr>';}).join('')+'</tbody></table></div>':'<p class="empty">No players match.</p>')+'<p class="fine" style="margin-top:10px">Click a player to see everything about them and manage the account.</p></div>';}
+function gamesTab(){var G=gamesRows;
+  return '<div class="card"><h2>Finished games</h2><form class="row" data-form="gsearch" style="margin-bottom:12px"><input id="gq" placeholder="Search by player name or game id" value="'+esc(gq)+'" aria-label="Search games"><button class="btn" type="submit">Search</button></form>'+
+   (!G?'<p class="empty">Loading…</p>':G.length?'<div class="scroll"><table class="tbl"><thead><tr><th>White</th><th>Black</th><th>Result</th><th class="hide-sm">Time</th><th class="hide-sm">Moves</th><th class="hide-sm">Played</th><th></th></tr></thead><tbody>'+G.map(function(g){
+    return '<tr><td>'+esc(g.w.name)+' <span style="color:var(--dim)">'+g.w.r+'</span></td><td>'+esc(g.b.name)+' <span style="color:var(--dim)">'+g.b.r+'</span></td><td>'+esc(g.result)+' <span style="color:var(--dim)">'+esc(g.reason)+'</span></td><td class="hide-sm">'+esc(g.tc)+(g.rated?'':' casual')+'</td><td class="hide-sm">'+Math.ceil(g.n/2)+'</td><td class="hide-sm">'+ago(g.end)+'</td><td class="acts"><a class="btn sm" href="./?game='+g.id+'#review" target="_blank" rel="noopener">Review</a><button class="btn sm bad" data-delgame="'+g.id+'" data-confirm="Delete this game from the history? Ratings stay as they are.">Delete</button></td></tr>';}).join('')+'</tbody></table></div>':'<p class="empty">No games found.</p>')+'</div>';}
+function chatTab(){var C=D.chat;
+  return '<div class="card"><h2>Live chat<span class="n">last '+C.length+' messages</span><span class="sp"></span>'+(D.settings.chat?'':'<span class="pill bad">Chat is off for everyone</span>')+'</h2>'+(C.length?C.map(function(c){return '<div class="chatline"><time>'+new Date(c.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'</time><span><b data-player="'+c.pid+'">'+esc(c.name)+':</b> '+esc(c.text)+'</span><button class="btn sm" data-pa="mute" data-id="'+c.pid+'">Turn off chat</button></div>';}).join(''):'<p class="empty">No messages since the server started.</p>')+'</div>';}
+function reportsTab(){var R=D.reports;
+  return '<div class="card"><h2>Reports<span class="n">'+R.length+'</span></h2>'+(R.length?R.map(function(r){return '<div class="rep"><div class="row"><b data-player="'+r.who+'" style="cursor:pointer">'+esc(r.whoName)+'</b><span class="note">reported by '+esc(r.byName)+', '+ago(r.ts)+'</span></div>'+(r.chat&&r.chat.length?'<div class="chat">'+r.chat.map(function(c){return '<div><b>'+esc(c.name)+':</b> '+esc(c.text)+'</div>';}).join('')+'</div>':'')+'<div class="row"><button class="btn sm" data-pa="mute" data-id="'+r.who+'">Turn off chat</button><button class="btn sm bad" data-player="'+r.who+'">Suspend…</button><button class="btn sm" data-rep="'+r.id+'">Dismiss</button></div></div>';}).join(''):'<p class="empty">No open reports.</p>')+'</div>';}
+function serverTab(){var d=D,st=d.settings,pz=d.puzzles,ps=pz.status||{};
+  function tg(k,t,s,warn){return '<div class="set"><div><b>'+t+'</b><small>'+s+'</small></div><button class="tog'+(warn?' warn':'')+(st[k]?' on':'')+'" data-setting="'+k+'" aria-pressed="'+!!st[k]+'" aria-label="'+t+'"></button></div>';}
+  var pzLine=pz.source==='lichess'?pz.count.toLocaleString()+' puzzles from Lichess':'Built-in set of '+pz.count+' puzzles';
+  if(ps.state==='running')pzLine='Downloading: '+ps.found+' found, '+ps.mb+' MB read';
+  if(ps.state==='error')pzLine+='. The last download failed: '+esc(ps.error);
+  return '<div class="cols"><div class="stack">'+
+   '<div class="card"><h2>Rules</h2>'+tg('maintenance','Maintenance mode','Stops new online games and shows a notice. Games in progress finish normally.',true)+tg('signups','New accounts','Let people create accounts')+tg('guestsOnline','Guests can play online','When off, only players with an account can play online')+tg('chat','Game chat','Let players message each other during games')+'</div>'+
+   '<div class="card"><h2>Announcement</h2><p class="note" style="margin-bottom:10px">Shown to everyone online and on the home page for 24 hours.</p><form data-form="announce" style="display:grid;gap:8px"><textarea id="at" maxlength="200" rows="2" placeholder="Server restarts at 2 am for an update" aria-label="Announcement">'+esc(d.announce?d.announce.text:'')+'</textarea><div class="row"><button class="btn pri" type="submit">Publish</button>'+(d.announce?'<button class="btn" type="button" data-act="unannounce">Remove</button>':'')+'</div></form></div>'+
+   '<div class="card"><h2>Blocked network addresses<span class="n">'+d.ipBans.length+'</span></h2><p class="note" style="margin-bottom:10px">Blocks every account and guest from an address. Find addresses in a player\'s details.</p><form class="row" data-form="ipban" style="margin-bottom:8px"><input id="ipIn" placeholder="Address" aria-label="Address"><input id="ipWhy" placeholder="Reason (optional)" aria-label="Reason"><button class="btn bad" type="submit">Block</button></form>'+
+     (d.ipBans.length?'<table class="tbl"><tbody>'+d.ipBans.map(function(b){return '<tr><td>'+esc(b.ip)+(b.reason?' <span style="color:var(--muted)">'+esc(b.reason)+'</span>':'')+'</td><td style="color:var(--dim)">'+ago(b.ts)+'</td><td class="acts"><button class="btn sm" data-unip="'+esc(b.ip)+'">Unblock</button></td></tr>';}).join('')+'</tbody></table>':'')+'</div>'+
+   '<div class="card"><h2>Admin log</h2>'+auditList(d.audit)+'</div>'+
+  '</div><div class="stack">'+
+   '<div class="card"><h2>Computer</h2><dl><dt>Name</dt><dd>'+esc(d.host)+'</dd><dt>System</dt><dd>'+esc(d.platform)+'</dd><dt>Processor</dt><dd>'+esc(d.cpuModel||'')+'</dd><dt>Node.js</dt><dd>'+esc(d.node)+'</dd><dt>Rookery</dt><dd>'+esc(d.version)+', running for '+dur(d.procUptime)+'</dd></dl></div>'+
+   updCard(d.updater)+
+   '<div class="card"><h2>Backup</h2><p class="note" style="margin-bottom:10px">Downloads every account, rating and game as one file. Keep a copy somewhere safe.</p><button class="btn pri" data-act="backup">Download backup</button></div>'+
+   '<div class="card"><h2>Puzzles</h2><p class="note" style="margin-bottom:10px">'+pzLine+'</p><button class="btn" data-act="puzzles"'+(ps.state==='running'?' disabled':'')+'>'+(pz.source==='lichess'?'Download again':'Download puzzles')+'</button></div>'+
+   '<div class="card"><h2>Restart</h2><p class="note" style="margin-bottom:10px">Restarts Rookery. Players reconnect by themselves within a few seconds and games in progress continue.</p><button class="btn bad" data-act="restart" data-confirm="Restart the server now?">Restart Rookery</button></div>'+
+   '<div class="card"><h2>Admin password</h2><form class="row" data-form="adminpw"><input id="np" type="password" minlength="8" placeholder="New password" autocomplete="new-password" aria-label="New admin password"><button class="btn" type="submit">Change</button></form></div>'+
+  '</div></div>';}
+
+function updCard(u){
+  if(!u)return '<div class="card"><h2>Automatic updates</h2><p class="note">Not set up yet. Start the updater once with <b>pm2 start updater.js --name rookery-updater</b> and Rookery keeps itself up to date.</p></div>';
+  var st=u.error?'<span class="pill bad">Last check failed</span>':!u.running?'<span class="pill bad">Updater not running</span>':u.sha&&u.sha===u.latest?'<span class="pill on">Up to date</span>':'<span class="pill play">Updating</span>';
+  return '<div class="card"><h2>Automatic updates<span class="sp"></span>'+st+'</h2><dl><dt>Source</dt><dd>github.com/'+esc(u.repo)+'</dd><dt>Version</dt><dd>'+(u.sha?esc(u.sha.slice(0,7))+(u.lastUpdateMessage?', '+esc(u.lastUpdateMessage):''):'–')+'</dd><dt>Updated</dt><dd>'+ago(u.lastUpdate)+'</dd><dt>Last check</dt><dd>'+ago(u.lastCheck)+'</dd>'+(u.error?'<dt>Problem</dt><dd>'+esc(u.error)+'</dd>':'')+'</dl><div class="row" style="margin-top:12px"><button class="btn" data-act="checkupdate">Check now</button></div></div>';}
+/* ----- player drawer ----- */
+function openPlayer(id){drawerId=id;api('player?id='+encodeURIComponent(id)).then(drawer).catch(function(e){toast(e.message);});}
+function closeDrawer(){drawerId=null;var s=document.querySelector('.scrim');if(s)s.remove();}
+function drawer(p){closeDrawer();drawerId=p.id;var s=document.createElement('div');s.className='scrim';
+  var R=p.ratings,st=p.banned?'<span class="pill bad">Suspended'+(p.banUntil?' until '+new Date(p.banUntil).toLocaleString():'')+'</span>':p.playing?'<span class="pill play">Playing</span>':p.online?'<span class="pill on">Online</span>':'<span class="pill">Offline</span>';
+  s.innerHTML='<aside class="drawer" role="dialog" aria-label="Player details"><button class="x" data-act="close" aria-label="Close">×</button><h3>'+ttl(p.title)+esc(p.name)+'</h3><div class="row" style="margin-top:8px">'+st+(p.guest?'<span class="pill">Guest</span>':'<span class="pill">Account</span>')+(p.muted?'<span class="pill bad">Chat off</span>':'')+(p.reports?'<span class="pill bad">'+p.reports+' report'+(p.reports>1?'s':'')+'</span>':'')+'</div>'+
+   (p.playing?'<div class="row" style="margin-top:12px"><a class="btn pri sm" href="./?watch='+p.playing+'#watch" target="_blank" rel="noopener">Watch their game</a></div>':'')+
+   '<section><h4>Details</h4><dl><dt>Joined</dt><dd>'+new Date(p.created).toLocaleDateString()+'</dd><dt>Last seen</dt><dd>'+ago(p.seen)+'</dd><dt>Network address</dt><dd>'+esc(p.lastIp||'–')+(p.ips.length>1?' <span style="color:var(--dim)">(also '+p.ips.slice(1).map(esc).join(', ')+')</span>':'')+'</dd><dt>Signed in on</dt><dd>'+p.sessions+' device'+(p.sessions===1?'':'s')+'</dd><dt>Friends</dt><dd>'+(p.friends.length?p.friends.map(esc).join(', '):'None')+'</dd>'+(p.banReason?'<dt>Suspension reason</dt><dd>'+esc(p.banReason)+'</dd>':'')+'<dt>Id</dt><dd>'+esc(p.id)+'</dd></dl></section>'+
+   '<section><h4>Ratings</h4><form class="rgrid" data-form="ratings">'+['bullet','blitz','rapid'].map(function(c){return '<label>'+c[0].toUpperCase()+c.slice(1)+'<input type="number" min="100" max="3500" name="'+c+'" value="'+R[c].r+'"></label>';}).join('')+'<label>Puzzles<input type="number" min="100" max="3500" name="puzzle" value="'+p.puzzle+'"></label></form><div class="row"><button class="btn sm" data-act="saveratings">Save ratings</button><button class="btn sm" data-pa="reset" data-id="'+p.id+'" data-confirm="Reset all game ratings to 1200?">Reset to 1200</button><span class="fine">'+['bullet','blitz','rapid'].map(function(c){return c+' '+R[c].w+'W '+R[c].l+'L '+R[c].d+'D';}).join(', ')+'</span></div></section>'+
+   '<section><h4>Message</h4><form class="row" data-form="msg"><input id="msgIn" maxlength="300" placeholder="'+(p.online?'Shown to them right away':'They are offline')+'" aria-label="Message"'+(p.online?'':' disabled')+'><button class="btn" type="submit"'+(p.online?'':' disabled')+'>Send</button></form></section>'+
+   '<section><h4>Title badge</h4><form class="row" data-form="title"><input id="titleIn" maxlength="16" placeholder="Like GM, VIP or Admin" value="'+esc(p.title||'')+'" aria-label="Title"><button class="btn" type="submit">Save</button>'+(p.title?'<button class="btn" type="button" data-act="notitle">Remove</button>':'')+'</form><p class="fine">Shown in gold next to their name everywhere.</p></section>'+
+   '<section><h4>Name</h4><form class="row" data-form="rename"><input id="renameIn" maxlength="20" value="'+esc(p.name)+'" aria-label="Name"><button class="btn" type="submit">Rename</button></form></section>'+
+   '<section><h4>Account</h4><div class="row">'+(p.guest?'':'<button class="btn" data-act="temppw" data-confirm="Create a new temporary password? They will be signed out everywhere.">Reset password</button>')+'<button class="btn" data-pa="logout" data-id="'+p.id+'">Sign out everywhere</button>'+(p.online?'<button class="btn" data-pa="kick" data-id="'+p.id+'">Disconnect</button>':'')+'<button class="btn" data-pa="'+(p.muted?'unmute':'mute')+'" data-id="'+p.id+'">'+(p.muted?'Allow chat':'Turn off chat')+'</button></div><div id="tempBox"></div></section>'+
+   '<section><h4>Suspension</h4>'+(p.banned?'<div class="row"><button class="btn pri" data-pa="unban" data-id="'+p.id+'">Lift suspension</button></div>':'<form style="display:grid;gap:8px" data-form="ban"><div class="row"><select id="banFor" aria-label="Length"><option value="60">1 hour</option><option value="1440">1 day</option><option value="10080">7 days</option><option value="43200">30 days</option><option value="0">Permanent</option></select><input id="banWhy" maxlength="120" placeholder="Reason, shown to the player" aria-label="Reason"></div><div class="row"><button class="btn bad" type="submit">Suspend</button>'+(p.lastIp?'<button class="btn bad" type="button" data-blockip="'+esc(p.lastIp)+'" data-confirm="Block every account from '+esc(p.lastIp)+'?">Block their address</button>':'')+'</div></form>')+'</section>'+
+   '<section><h4>Recent games</h4>'+(p.games.length?'<table class="tbl"><tbody>'+p.games.map(function(g){var c=g.color,o=c?g.white:g.black,res=g.result==='1/2-1/2'?'Draw':((g.result==='1-0')===(c===0)?'Won':'Lost');return '<tr><td>'+res+' vs '+esc(o.name)+'<br><span style="color:var(--dim);font-size:12px">'+esc(g.tc)+', '+esc(g.reason)+', '+ago(g.ts)+'</span></td><td class="acts"><a class="btn sm" href="./?game='+g.id+'#review" target="_blank" rel="noopener">Review</a></td></tr>';}).join('')+'</tbody></table>':'<p class="empty">No finished games.</p>')+'</section>'+
+   '<section><h4>Danger zone</h4><div class="row"><button class="btn bad" data-pa="delete" data-id="'+p.id+'" data-confirm="Delete '+esc(p.name)+' and their ratings for good?">Delete account</button></div></section></aside>';
+  document.body.appendChild(s);
+  s.addEventListener('pointerdown',function(e){if(e.target===s)closeDrawer();});
+  s.addEventListener('click',onClick);s.addEventListener('submit',onSubmit);}
+function reloadDrawer(){if(drawerId)openPlayer(drawerId);}
+
+/* ----- events ----- */
+function confirmFirst(b){if(!b.dataset.confirm||armed===b)return true;armed=b;b._txt=b.textContent;b.textContent='Click again to confirm';setTimeout(function(){if(armed===b){armed=null;b.textContent=b._txt;}},3500);return false;}
+function done(msg){return function(){toast(msg||'Done');refresh();loadPlayers();reloadDrawer();};}
+function fail(e){toast(e.message);}
+function onClick(e){var b=e.target.closest('button,[data-player],a');if(!b)return;
+  if(b.tagName==='A')return;
+  if(b.dataset.tab){setTab(b.dataset.tab);return;}
+  if(b.dataset.player&&!b.dataset.pa){openPlayer(b.dataset.player);return;}
+  if(!confirmFirst(b))return;armed=null;
+  var a=b.dataset.act;
+  if(a==='logout')return logout();
+  if(a==='close')return closeDrawer();
+  if(b.dataset.pa){var act=b.dataset.pa;api('player',{id:b.dataset.id,action:act}).then(function(){toast('Done');if(act==='delete')closeDrawer();refresh();loadPlayers();if(act!=='delete')reloadDrawer();}).catch(fail);return;}
+  if(b.dataset.end){api('endgame',{gid:b.dataset.end,result:b.dataset.r}).then(done('Game ended')).catch(fail);return;}
+  if(b.dataset.delgame){api('deletegame',{id:b.dataset.delgame}).then(function(){toast('Game deleted');loadGames();}).catch(fail);return;}
+  if(b.dataset.rep){api('report',{id:b.dataset.rep}).then(done('Report dismissed')).catch(fail);return;}
+  if(b.dataset.setting){var k=b.dataset.setting;api('settings',{key:k,value:!D.settings[k]}).then(function(){D.settings[k]=!D.settings[k];toast('Saved');refresh();render();}).catch(fail);return;}
+  if(b.dataset.unip){api('ipban',{ip:b.dataset.unip,remove:true}).then(done('Address unblocked')).catch(fail);return;}
+  if(b.dataset.blockip){api('ipban',{ip:b.dataset.blockip,reason:'Blocked from player details'}).then(done('Address blocked')).catch(fail);return;}
+  if(a==='unannounce')return api('announce',{text:''}).then(done('Announcement removed')).catch(fail);
+  if(a==='puzzles')return api('puzzles',{}).then(function(){toast('Download started');setTimeout(refresh,1500);}).catch(fail);
+  if(a==='checkupdate')return api('checkupdate',{}).then(function(){toast('Checking for updates');setTimeout(refresh,8000);}).catch(fail);
+  if(a==='restart')return api('restart',{}).then(function(){toast('Restarting. This page reconnects by itself.');}).catch(fail);
+  if(a==='backup')return fetch('api/admin/backup',{headers:{Authorization:'Bearer '+tok}}).then(function(r){if(!r.ok)throw new Error('Backup failed');return r.blob();}).then(function(bl){var u=URL.createObjectURL(bl),l=document.createElement('a');l.href=u;l.download='rookery-backup-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(l);l.click();l.remove();setTimeout(function(){URL.revokeObjectURL(u);},2000);toast('Backup downloaded');}).catch(fail);
+  if(a==='saveratings'){var f=document.querySelector('[data-form=ratings]'),calls=[];['bullet','blitz','rapid','puzzle'].forEach(function(c){calls.push(api('player',{id:drawerId,action:'rating',cat:c,value:f.elements[c].value}));});return Promise.all(calls).then(done('Ratings saved')).catch(fail);}
+  if(a==='notitle')return api('player',{id:drawerId,action:'title',title:''}).then(done('Title removed')).catch(fail);
+  if(a==='temppw')return api('player',{id:drawerId,action:'password'}).then(function(r){document.getElementById('tempBox').innerHTML='<p class="note">New temporary password. Give it to the player privately; they can change it after signing in.</p><div class="temp">'+esc(r.temp)+'</div>';toast('Password reset');}).catch(fail);}
+function onSubmit(e){var f=e.target.closest('form');if(!f)return;e.preventDefault();var k=f.dataset.form,v=function(id){var el=document.getElementById(id);return el?el.value:'';};
+  if(k==='psearch'){q=v('pq').trim();loadPlayers();return;}
+  if(k==='gsearch'){gq=v('gq').trim();loadGames();return;}
+  if(k==='announce')return api('announce',{text:v('at')}).then(done('Announcement published')).catch(fail);
+  if(k==='ipban')return api('ipban',{ip:v('ipIn'),reason:v('ipWhy')}).then(done('Address blocked')).catch(fail);
+  if(k==='adminpw')return api('password',{password:v('np')}).then(function(r){tok=r.token;try{sessionStorage.setItem('rk-admin',tok);}catch(er){}toast('Admin password changed');document.getElementById('np').value='';}).catch(fail);
+  if(k==='msg')return api('player',{id:drawerId,action:'message',text:v('msgIn')}).then(function(){toast('Message sent');document.getElementById('msgIn').value='';}).catch(fail);
+  if(k==='title')return api('player',{id:drawerId,action:'title',title:v('titleIn')}).then(done('Title saved')).catch(fail);
+  if(k==='rename')return api('player',{id:drawerId,action:'rename',name:v('renameIn')}).then(done('Renamed')).catch(fail);
+  if(k==='ban')return api('player',{id:drawerId,action:'ban',minutes:+v('banFor'),reason:v('banWhy')}).then(done('Player suspended')).catch(fail);}
+app.addEventListener('click',onClick);app.addEventListener('submit',onSubmit);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDrawer();});
+if(tok)start();else loginView();
+})();
+</script>
+</body></html>
