@@ -179,7 +179,7 @@ function overview(){var d=D,s=d.samples,last=s[s.length-1]||{cpu:0},memUsed=d.me
    '<div class="grid" style="margin-top:12px">'+
    '<div class="card kpi"><small>Processor</small><b>'+last.cpu.toFixed(0)+'%</b><span>'+d.cores+' cores</span>'+spark(s,'cpu',100,'#c9a45c')+'</div>'+
    '<div class="card kpi"><small>Memory</small><b>'+bytes(memUsed)+'</b><span>of '+bytes(d.memTotal)+', Rookery uses '+bytes(d.rss)+'</span>'+spark(s,'mem',100,'#7aa3c9')+'</div>'+
-   '<div class="card kpi"><small>Disk</small><b>'+(disk?bytes(disk.free):'–')+'</b><span>free of '+(disk?bytes(disk.total):'–')+'</span><div class="meter"><i class="'+(disk&&(disk.total-disk.free)/disk.total>.9?'hot':'')+'" style="width:'+(disk?((disk.total-disk.free)/disk.total*100).toFixed(1):0)+'%"></i></div></div>'+
+   '<div class="card kpi"><small>Storage'+(disk&&disk.list&&disk.list.length>1?', '+disk.list.length+' drives':'')+'</small><b>'+(disk?bytes(disk.free):'–')+'</b><span>free of '+(disk?bytes(disk.total):'–')+'</span><div class="meter"><i class="'+(disk&&(disk.total-disk.free)/disk.total>.9?'hot':'')+'" style="width:'+(disk?((disk.total-disk.free)/disk.total*100).toFixed(1):0)+'%"></i></div></div>'+
    '<div class="card kpi"><small>Running for</small><b>'+dur(d.procUptime)+'</b><span>Computer on for '+dur(d.uptime)+'</span>'+spark(s,'online',Math.max(4,Math.max.apply(null,s.map(function(x){return x.online;}))),'#80b98c')+'</div></div>'+
    '<div class="cols"><div class="card"><h2>Last 14 days</h2>'+bars+'</div><div class="card"><h2>Recent activity<span class="sp"></span><button class="btn sm" data-tab="server">Full log</button></h2>'+auditList(d.audit.slice(0,8))+'</div></div>';}
 function auditList(a){return a.length?'<table class="tbl"><tbody>'+a.map(function(x){return '<tr><td>'+esc(x.action)+(x.detail?' <span style="color:var(--muted)">'+esc(x.detail)+'</span>':'')+'</td><td style="text-align:right;color:var(--dim);white-space:nowrap">'+ago(x.ts)+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">Nothing yet.</p>';}
@@ -215,12 +215,19 @@ function serverTab(){var d=D,st=d.settings,pz=d.puzzles,ps=pz.status||{};
   '</div><div class="stack">'+
    '<div class="card"><h2>Computer</h2><dl><dt>Name</dt><dd>'+esc(d.host)+'</dd><dt>System</dt><dd>'+esc(d.platform)+'</dd><dt>Processor</dt><dd>'+esc(d.cpuModel||'')+'</dd><dt>Node.js</dt><dd>'+esc(d.node)+'</dd><dt>Rookery</dt><dd>'+esc(d.version)+', running for '+dur(d.procUptime)+'</dd></dl></div>'+
    updCard(d.updater)+
-   '<div class="card"><h2>Backup</h2><p class="note" style="margin-bottom:10px">Downloads every account, rating and game as one file. Keep a copy somewhere safe.</p><button class="btn pri" data-act="backup">Download backup</button></div>'+
+   storageCard(d.disk)+backupCard(d.backup)+
    '<div class="card"><h2>Puzzles</h2><p class="note" style="margin-bottom:10px">'+pzLine+'</p><button class="btn" data-act="puzzles"'+(ps.state==='running'?' disabled':'')+'>'+(pz.source==='lichess'?'Download again':'Download puzzles')+'</button></div>'+
    '<div class="card"><h2>Restart</h2><p class="note" style="margin-bottom:10px">Restarts Rookery. Players reconnect by themselves within a few seconds and games in progress continue.</p><button class="btn bad" data-act="restart" data-confirm="Restart the server now?">Restart Rookery</button></div>'+
    '<div class="card"><h2>Admin password</h2><form class="row" data-form="adminpw"><input id="np" type="password" minlength="8" placeholder="New password" autocomplete="new-password" aria-label="New admin password"><button class="btn" type="submit">Change</button></form></div>'+
   '</div></div>';}
 
+function storageCard(dk){if(!dk||!dk.list)return '';
+  return '<div class="card"><h2>Storage<span class="sp"></span><span class="n">'+bytes(dk.free)+' free of '+bytes(dk.total)+'</span></h2>'+dk.list.map(function(x){var used=(x.total-x.free)/x.total*100;return '<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between"><b>'+esc(x.name)+(x.here?' <span class="pill on">Rookery runs here</span>':'')+(x.system&&!x.here?' <span class="pill">Windows</span>':'')+'</b><span class="note">'+bytes(x.free)+' free of '+bytes(x.total)+'</span></div><div class="meter"><i class="'+(used>90?'hot':'')+'" style="width:'+used.toFixed(1)+'%"></i></div></div>';}).join('')+'<p class="fine">Rookery itself needs very little space. The other drives hold the automatic backups.</p></div>';}
+function backupCard(b){b=b||{};
+  return '<div class="card"><h2>Backups<span class="sp"></span>'+(b.error?'<span class="pill bad">Last backup failed</span>':b.last?'<span class="pill on">Daily backup on</span>':'<span class="pill">First backup soon</span>')+'</h2><p class="note" style="margin-bottom:10px">Every account, rating and game is copied once a day. The last '+(b.keep||14)+' copies are kept.</p>'+
+   '<dl><dt>Folder</dt><dd>'+esc(b.folder||'–')+'</dd><dt>Last copy</dt><dd>'+(b.last?ago(b.last):'Not yet')+'</dd>'+(b.error?'<dt>Problem</dt><dd>'+esc(b.error)+'</dd>':'')+'</dl>'+
+   '<form class="row" data-form="backupdir" style="margin-top:12px"><input id="bdir" placeholder="Folder, like E:\\Rookery-backups" value="'+esc(b.dir||'')+'" aria-label="Backup folder"><button class="btn" type="submit">Save folder</button></form><p class="fine" style="margin-top:6px">Leave empty to pick a drive automatically.</p>'+
+   '<div class="row" style="margin-top:12px"><button class="btn" data-act="backupnow">Back up now</button><button class="btn pri" data-act="backup">Download a copy</button></div></div>';}
 function updCard(u){
   if(!u)return '<div class="card"><h2>Automatic updates</h2><p class="note">Not set up yet. Start the updater once with <b>pm2 start updater.js --name rookery-updater</b> and Rookery keeps itself up to date.</p></div>';
   var st=u.error?'<span class="pill bad">Last check failed</span>':!u.running?'<span class="pill bad">Updater not running</span>':u.sha&&u.sha===u.latest?'<span class="pill on">Up to date</span>':'<span class="pill play">Updating</span>';
@@ -267,6 +274,7 @@ function onClick(e){var b=e.target.closest('button,[data-player],a');if(!b)retur
   if(b.dataset.blockip){api('ipban',{ip:b.dataset.blockip,reason:'Blocked from player details'}).then(done('Address blocked')).catch(fail);return;}
   if(a==='unannounce')return api('announce',{text:''}).then(done('Announcement removed')).catch(fail);
   if(a==='puzzles')return api('puzzles',{}).then(function(){toast('Download started');setTimeout(refresh,1500);}).catch(fail);
+  if(a==='backupnow')return api('backupnow',{}).then(function(r){toast('Backup saved');refresh();}).catch(fail);
   if(a==='checkupdate')return api('checkupdate',{}).then(function(){toast('Checking for updates');setTimeout(refresh,8000);}).catch(fail);
   if(a==='restart')return api('restart',{}).then(function(){toast('Restarting. This page reconnects by itself.');}).catch(fail);
   if(a==='backup')return fetch('api/admin/backup',{headers:{Authorization:'Bearer '+tok}}).then(function(r){if(!r.ok)throw new Error('Backup failed');return r.blob();}).then(function(bl){var u=URL.createObjectURL(bl),l=document.createElement('a');l.href=u;l.download='rookery-backup-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(l);l.click();l.remove();setTimeout(function(){URL.revokeObjectURL(u);},2000);toast('Backup downloaded');}).catch(fail);
@@ -282,6 +290,7 @@ function onSubmit(e){var f=e.target.closest('form');if(!f)return;e.preventDefaul
   if(k==='msg')return api('player',{id:drawerId,action:'message',text:v('msgIn')}).then(function(){toast('Message sent');document.getElementById('msgIn').value='';}).catch(fail);
   if(k==='title')return api('player',{id:drawerId,action:'title',title:v('titleIn')}).then(done('Title saved')).catch(fail);
   if(k==='rename')return api('player',{id:drawerId,action:'rename',name:v('renameIn')}).then(done('Renamed')).catch(fail);
+  if(k==='backupdir')return api('backupdir',{dir:v('bdir')}).then(done('Backup folder saved')).catch(fail);
   if(k==='ban')return api('player',{id:drawerId,action:'ban',minutes:+v('banFor'),reason:v('banWhy')}).then(done('Player suspended')).catch(fail);}
 app.addEventListener('click',onClick);app.addEventListener('submit',onSubmit);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDrawer();});

@@ -9,7 +9,7 @@ const zlib = require('zlib');
 const vm = require('vm');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 const PORT = +process.env.PORT || 3001;
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
@@ -708,9 +708,43 @@ function sample() {
   if (sys.samples.length > 360) sys.samples.shift();
 }
 sample(); setInterval(sample, 10000);
-function disk() {
-  try { const s = fs.statfsSync(ROOT); return { total: s.blocks * s.bsize, free: s.bavail * s.bsize }; } catch (e) { return null; }
+function drives() {
+  const out = [];
+  if (process.platform === 'win32') {
+    for (const L of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+      try { const s = fs.statfsSync(L + ':\\'); if (s.blocks > 0) out.push({ name: L + ':', total: s.blocks * s.bsize, free: s.bavail * s.bsize, system: L === 'C', here: ROOT[0].toUpperCase() === L }); } catch (e) {}
+    }
+  } else {
+    try { const s = fs.statfsSync(ROOT); out.push({ name: '/', total: s.blocks * s.bsize, free: s.bavail * s.bsize, system: true, here: true }); } catch (e) {}
+  }
+  return out;
 }
+function disk() {
+  const d = drives(); if (!d.length) return null;
+  return { total: d.reduce((a, x) => a + x.total, 0), free: d.reduce((a, x) => a + x.free, 0), list: d };
+}
+/* ----- automatic backups ----- */
+db.backup = db.backup || { dir: null, keep: 14, last: null, lastFile: null, error: null };
+function backupDir() {
+  if (db.backup.dir) return db.backup.dir;
+  const other = drives().filter(d => !d.system && process.platform === 'win32');
+  return other.length ? other[0].name + '\\Rookery-backups' : path.join(DATA, 'backups');
+}
+function runBackup() {
+  const dir = backupDir();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const name = 'rookery-backup-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json';
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ exported: new Date().toISOString(), version: VERSION, db, games: [...records.values()] }));
+    const old = fs.readdirSync(dir).filter(f => /^rookery-backup-.*\.json$/.test(f)).sort();
+    while (old.length > (db.backup.keep || 14)) { try { fs.unlinkSync(path.join(dir, old.shift())); } catch (e) {} }
+    db.backup.last = Date.now(); db.backup.lastFile = path.join(dir, name); db.backup.error = null;
+    log('[backup] saved ' + db.backup.lastFile);
+  } catch (e) { db.backup.error = e.message; db.backup.lastTry = Date.now(); log('[backup] failed: ' + e.message); }
+  save();
+}
+setInterval(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) { if (!db.backup.lastTry || Date.now() - db.backup.lastTry > 3600e3) runBackup(); } }, 10 * 60000);
+setTimeout(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) runBackup(); }, 30000);
 function overview() {
   let playing = 0, spect = 0; games.forEach(g => { if (!g.over) { playing++; spect += g.spect.size; } });
   const all = Object.values(db.players), today = new Date(); today.setHours(0, 0, 0, 0);
@@ -726,7 +760,7 @@ function overview() {
     reports: db.reports.filter(r => r.open).slice(-50).reverse(), announce: db.announce,
     settings: db.settings, ipBans: Object.entries(db.ipBans).map(([ip, v]) => Object.assign({ ip }, v)),
     audit: db.audit.slice(-80).reverse(), chat: chatLog.slice(-120).reverse(), activity: activity(),
-    titles: all.filter(p => p.title).length, updater: updaterInfo()
+    titles: all.filter(p => p.title).length, updater: updaterInfo(), backup: Object.assign({ folder: backupDir() }, db.backup)
   };
 }
 function updaterInfo() {
@@ -891,6 +925,14 @@ async function adminApi(req, res, route) {
       wss.clients.forEach(w => { if (w.ip === tip) { send(w, { t: 'banned', msg: 'Access from your network has been blocked.' }); try { w.close(); } catch (e) {} } });
     }
     audit(ip, b.remove ? 'unblock address' : 'block address', tip); save();
+    return json(res, 200, { ok: true });
+  }
+  if (route === 'backupnow') { runBackup(); audit(ip, 'backup', 'automatic copy now'); return db.backup.error ? json(res, 500, { error: db.backup.error }) : json(res, 200, { ok: true, file: db.backup.lastFile }); }
+  if (route === 'backupdir') {
+    const dir = String(b.dir || '').trim();
+    if (dir && !path.isAbsolute(dir)) return json(res, 400, { error: 'Use a full folder path, like E:\\Rookery-backups' });
+    try { if (dir) fs.mkdirSync(dir, { recursive: true }); } catch (e) { return json(res, 400, { error: 'That folder cannot be created: ' + e.message }); }
+    db.backup.dir = dir || null; save(); audit(ip, 'backup folder', dir || 'automatic');
     return json(res, 200, { ok: true });
   }
   if (route === 'checkupdate') { fs.writeFileSync(path.join(DATA, 'update-now'), '1'); audit(ip, 'check for update', ''); return json(res, 200, { ok: true }); }
