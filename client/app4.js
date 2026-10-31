@@ -106,7 +106,7 @@ function profilePage(){
   cards.push(['bots','Computer',profile.rating,profile.w+' wins, '+profile.l+' losses, '+profile.d+' draws',I.bot]);
   if(!cards.some(function(c){return c[0]===profCat;}))profCat=cards[0][0];
   var g=allGames();
-  return '<header class="ptitle"><div style="display:flex;gap:20px;align-items:center;flex:1;min-width:0"><button data-act="avatar" aria-label="Change avatar" title="Change avatar">'+avatar(a,'xl')+'</button><div style="min-width:0"><h1>'+esc(myName())+'</h1><p>'+(me?(guest?'Guest player':'Member since '+since):'Playing offline on this device')+'</p></div></div><div class="row">'+acct+'<a class="btn ghost" href="#prefs">'+I.prefs+'Settings</a></div></header>'+
+  return '<header class="ptitle prof"><div class="phead"><button class="avbtn" data-act="avatar" aria-label="Change avatar" title="Change avatar">'+avatar(a,'xl')+'</button><div style="min-width:0"><h1>'+esc(myName())+'</h1><p>'+(me?(guest?'Guest player':'Member since '+since):'Playing offline on this device')+'</p></div></div><div class="row">'+acct+'<a class="btn ghost" href="#prefs">'+I.prefs+'Settings</a></div></header>'+
     '<div class="rcards" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">'+cards.map(function(c){return '<button class="rc'+(profCat===c[0]?' on':'')+'" data-act="profcat" data-k="'+c[0]+'"><small>'+c[4]+c[1]+'</small><b>'+c[2]+'</b><span>'+c[3]+'</span></button>';}).join('')+'</div>'+
     '<div class="card" style="margin-top:14px">'+ratingChart(hist,profCat)+'</div>'+
     '<section class="blk" style="margin-top:28px"><h2>Games</h2><div class="card list">'+(g.length?g.slice(0,40).map(gameRow).join(''):'<p class="note">Your finished games show up here, each with a full review.</p>')+'</div></section>';}

@@ -567,3 +567,17 @@ ol.rules li{margin:8px 0}
 @media (max-width:900px){.legal{grid-template-columns:1fr}.legalnav{position:static;display:flex;overflow-x:auto;gap:4px}.legalnav a{white-space:nowrap}.doc{padding:20px 18px}.ptab td:first-child{white-space:normal}.legalbar{bottom:calc(76px + env(safe-area-inset-bottom,0px))}}
 .legalbar{width:min(720px,calc(100% - 24px))}
 @media (max-width:600px){.legalbar{flex-direction:column;align-items:stretch;gap:10px}.ptab thead{display:none}.ptab tr{display:block;padding:10px 0;border-bottom:1px solid var(--line)}.ptab td{display:block;border:0;padding:2px 0}.ptab td:first-child{margin-bottom:4px}.ptab td:last-child{color:var(--dim);font-size:13px}}
+/* profile header */
+.phead{display:flex;gap:20px;align-items:center;flex:1 1 320px;min-width:0}
+.phead>div{min-width:0}
+.phead h1{overflow-wrap:anywhere}
+.avbtn{flex:none;display:block;padding:0;border:0;background:none;line-height:0;border-radius:18px}
+.ptitle.prof>.row{flex:none}
+@media (max-width:600px){
+  .ptitle.prof{flex-direction:column;align-items:stretch;gap:16px}
+  .phead{flex:none;gap:14px}
+  .phead .av.xl{--s:68px}
+  .phead h1{font-size:32px}
+  .ptitle.prof>.row{gap:8px}
+  .ptitle.prof>.row>.btn{flex:1 1 auto;justify-content:center}
+}
