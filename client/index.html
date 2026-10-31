@@ -1,0 +1,51 @@
+<title>Rookery</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Play chess online with friends, solve puzzles and review your games.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400..700&family=Onest:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/*CSS*/
+</style>
+<div class="app">
+  <aside class="side" aria-label="Main navigation">
+    <a class="brand" href="#home" aria-label="Rookery home">
+      <svg viewBox="0 0 40 40" fill="currentColor" aria-hidden="true"><path d="M9 35h22l-1.6-4.2H10.6z"/><path d="M12.2 30.8 13.6 16h12.8l1.4 14.8z" opacity=".88"/><path d="M10 6h4.2v3.6h3.2V6h5.2v3.6h3.2V6H30v6.6l-2.6 2.2H12.6L10 12.6z"/></svg>
+      <b>Rookery</b>
+    </a>
+    <nav class="nav" id="nav"></nav>
+    <div class="fill"></div>
+    <a class="me-chip" id="meChip" href="#profile"></a>
+  </aside>
+  <main class="main" id="main">
+    <section class="stage" id="stage" hidden>
+      <div class="bcol">
+        <div class="pbar" id="barTop"></div>
+        <div class="bwrap">
+          <div class="evalbar" id="evalbar" hidden><div class="w"></div><span class="t"></span><span class="b"></span></div>
+          <div class="bbox" id="bbox"><div class="board" id="board"></div></div>
+        </div>
+        <div class="pbar" id="barBot"></div>
+      </div>
+      <aside class="panel" id="panel"></aside>
+    </section>
+    <div class="page" id="page"></div>
+  </main>
+  <nav class="tabbar" id="tabbar" aria-label="Main navigation"></nav>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<script id="core">
+/*CORE*/
+</script>
+<script>
+(function(){
+'use strict';
+/*APP*/
+})();
+</script>

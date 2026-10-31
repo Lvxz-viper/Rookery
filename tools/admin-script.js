@@ -1,0 +1,302 @@
+(function(){
+'use strict';
+var tok=null,ROLE='owner',ME='Owner';try{tok=sessionStorage.getItem('rk-admin');ROLE=sessionStorage.getItem('rk-role')||'owner';}catch(e){}
+var app=document.getElementById('app'),D=null,players=[],pcount=0,gamesRows=null,q='',gq='',tab='overview',timer=null,drawerId=null,armed=null,P=null;
+var pkind='all',psort='seen',poff=0,PLIM=100,AN=null,LOGS=null,logErr=false,logQ='',BK=null,loginMode='owner';
+try{tab=sessionStorage.getItem('rk-tab')||'overview';}catch(e){}
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});};
+var rook='<svg viewBox="0 0 40 40" fill="currentColor" aria-hidden="true"><path d="M9 35h22l-1.6-4.2H10.6z"/><path d="M12.2 30.8 13.6 16h12.8l1.4 14.8z" opacity=".88"/><path d="M10 6h4.2v3.6h3.2V6h5.2v3.6h3.2V6H30v6.6l-2.6 2.2H12.6L10 12.6z"/></svg>';
+var CATS=['bullet','blitz','rapid','daily'],CATN={bullet:'Bullet',blitz:'Blitz',rapid:'Rapid',daily:'Daily'};
+function isOwner(){return ROLE==='owner';}function isMod(){return ROLE==='mod';}
+function toast(m){var o=document.querySelector('.toast');if(o)o.remove();var d=document.createElement('div');d.className='toast';d.textContent=m;document.body.appendChild(d);setTimeout(function(){d.remove();},2800);}
+function api(path,body){return fetch('api/admin/'+path,{method:body?'POST':'GET',headers:Object.assign({'Content-Type':'application/json'},tok?{Authorization:'Bearer '+tok}:{}),body:body?JSON.stringify(body):undefined})
+  .then(function(r){return r.json().then(function(j){if(r.status===401&&path!=='login'){logout();throw new Error('Signed out');}if(!r.ok)throw new Error(j.error||'Request failed');return j;});});}
+function logout(){tok=null;try{sessionStorage.removeItem('rk-admin');sessionStorage.removeItem('rk-role');}catch(e){}clearInterval(timer);closeDrawer();loginView();}
+function bytes(n){if(n==null)return '–';var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<4){n/=1024;i++;}return n.toFixed(n<10&&i?1:0)+' '+u[i];}
+function dur(s){s=Math.floor(s);var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?d+'d '+h+'h':h?h+'h '+m+'m':m+'m';}
+function ago(ts){if(!ts)return '–';var s=(Date.now()-ts)/1000;if(s<60)return 'just now';if(s<3600)return Math.floor(s/60)+' min ago';if(s<86400)return Math.floor(s/3600)+' h ago';return Math.floor(s/86400)+' d ago';}
+function clock(ms){ms=Math.max(0,ms||0);var t=Math.ceil(ms/1000);return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');}
+function ttl(t){return t?'<span class="ttl">'+esc(t)+'</span>':'';}
+function rolePill(r){return r==='admin'?'<span class="pill play">Admin</span>':r==='mod'?'<span class="pill on">Moderator</span>':'';}
+function flag(cc){return cc&&/^[A-Z]{2}$/.test(cc)?String.fromCodePoint(127397+cc.charCodeAt(0),127397+cc.charCodeAt(1)):'';}
+function spark(arr,key,max,color){if(!arr||arr.length<2)return '<svg class="spark"></svg>';var W=240,H=46,n=arr.length;
+  var pts=arr.map(function(s,i){return [i/(n-1)*W,H-2-Math.min(1,s[key]/max)*(H-6)];});
+  var l=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1);}).join(' ');
+  return '<svg class="spark" viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="none" aria-hidden="true"><path d="'+l+' L'+W+' '+H+' L0 '+H+' Z" fill="'+color+'" opacity=".14"/><path d="'+l+'" fill="none" stroke="'+color+'" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>';}
+var GLY={P:'♙',N:'♘',B:'♗',R:'♖',Q:'♕',K:'♔',p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
+function mini(fen,last){var rows=fen.split(' ')[0].split('/'),h='',ls=[];if(last){ls=[last.slice(0,2),last.slice(2,4)];}
+  for(var r=0;r<8;r++){var c=0;for(var i=0;i<rows[r].length;i++){var ch=rows[r][i];if(/\d/.test(ch)){for(var k=0;k<+ch;k++){h+=sq(r,c,'');c++;}}else{h+=sq(r,c,ch);c++;}}}
+  function sq(r,c,p){var nm='abcdefgh'[c]+(8-r);return '<i class="'+((r+c)%2?'d':'')+(ls.indexOf(nm)>=0?' l':'')+'">'+(p?'<span class="'+(p===p.toUpperCase()?'w':'b')+'">'+GLY[p.toLowerCase()]+'</span>':'')+'</i>';}
+  return '<div class="mini" aria-hidden="true">'+h+'</div>';}
+var COUNTRIES=(function(){var out=[],dn=null;try{dn=new Intl.DisplayNames(['en'],{type:'region'});}catch(e){}if(!dn)return out;
+  for(var i=0;i<26;i++)for(var j=0;j<26;j++){var cc=String.fromCharCode(65+i,65+j),n;try{n=dn.of(cc);}catch(e){n=null;}if(n&&n!==cc&&!/^(Unknown|Pseudo|Outlying|European Union|Eurozone|United Nations|World)/i.test(n)&&!/^(AA|Q[M-Z]|X[A-Z]|ZZ|EZ|UN|EU)$/.test(cc))out.push([cc,n]);}
+  return out.sort(function(a,b){return a[1].localeCompare(b[1]);});})();
+
+/* ----- sign in ----- */
+function loginView(){
+  app.innerHTML='<form class="login" id="lf"><div style="color:var(--brass);width:40px">'+rook+'</div><h1>Control room</h1>'+
+    '<div class="seg"><button type="button" class="'+(loginMode==='owner'?'on':'')+'" data-lm="owner">Owner</button><button type="button" class="'+(loginMode==='staff'?'on':'')+'" data-lm="staff">Admin or moderator</button></div>'+
+    (loginMode==='owner'?'<p class="note">Sign in with the admin password. On first start it is saved in <b>data\\ADMIN-PASSWORD.txt</b> inside your server folder.</p>':'<p class="note">Use your Rookery username and password. The owner gives staff roles from a player\'s details.</p><input id="un" autocomplete="username" placeholder="Username" aria-label="Username" required>')+
+    '<input id="pw" type="password" autocomplete="current-password" placeholder="'+(loginMode==='owner'?'Admin password':'Password')+'" aria-label="Password" required><div class="err" id="err"></div><button class="btn pri" type="submit" style="padding:11px">Sign in</button></form>';
+  app.querySelectorAll('[data-lm]').forEach(function(b){b.onclick=function(){loginMode=b.dataset.lm;loginView();};});
+  document.getElementById('lf').onsubmit=function(e){e.preventDefault();var body={password:document.getElementById('pw').value};var un=document.getElementById('un');if(un)body.username=un.value;
+    api('login',body).then(function(r){tok=r.token;ROLE=r.role||'owner';ME=r.name||'Owner';try{sessionStorage.setItem('rk-admin',tok);sessionStorage.setItem('rk-role',ROLE);}catch(er){}start();}).catch(function(er){document.getElementById('err').textContent=er.message;});};
+  (document.getElementById('un')||document.getElementById('pw')).focus();}
+function start(){refresh(true);loadPlayers();clearInterval(timer);timer=setInterval(function(){if(!document.hidden)refresh();},5000);}
+function refresh(first){api('overview').then(function(d){D=d;if(d.me){ROLE=d.me.role;ME=d.me.name;try{sessionStorage.setItem('rk-role',ROLE);}catch(e){}}if(!tabs().some(function(t){return t[0]===tab;}))tab='overview';if(first||!busy())render();else renderHead();}).catch(function(){});}
+function busy(){var a=document.activeElement;return a&&/INPUT|TEXTAREA|SELECT/.test(a.tagName)&&app.contains(a)||!!document.querySelector('.hold');}
+function loadPlayers(){api('players?q='+encodeURIComponent(q)+'&kind='+pkind+'&sort='+psort+'&offset='+poff+'&limit='+PLIM).then(function(d){players=d.rows;pcount=d.count;if(tab==='players')render();}).catch(function(){});}
+function loadGames(){api('games?q='+encodeURIComponent(gq)).then(function(d){gamesRows=d.rows;if(tab==='games')render();}).catch(function(){});}
+function loadAnalytics(){api('analytics').then(function(d){AN=d;if(tab==='analytics')render();}).catch(fail);}
+function loadLogs(){api('logs').then(function(d){LOGS=d.lines;if(tab==='logs')render();}).catch(fail);}
+function loadBackups(){api('backups').then(function(d){BK=d;if(tab==='server')render();}).catch(function(){});}
+function setTab(t){tab=t;try{sessionStorage.setItem('rk-tab',t);}catch(e){}if(t==='games'&&!gamesRows)loadGames();if(t==='players')loadPlayers();if(t==='analytics')loadAnalytics();if(t==='logs')loadLogs();if(t==='server')loadBackups();render();}
+
+function tabs(){var c=D.counts,t=[['overview','Overview'],['live','Live games',c.playing],['players','Players'],['games','Games']];
+  if(!isMod())t.push(['analytics','Analytics']);
+  t.push(['chat','Chat'],['reports','Reports',c.reports]);
+  if(!isMod())t.push(['moderation','Moderation'],['logs','Logs']);
+  if(isOwner())t.push(['server','Server']);
+  return t;}
+function renderHead(){var h=document.getElementById('tabsbar');if(h)h.innerHTML=tabsHTML();}
+function tabsHTML(){return tabs().map(function(t){return '<button class="'+(tab===t[0]?'on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[2]?'<span class="n">'+t[2]+'</span>':'')+'</button>';}).join('');}
+function render(){if(!D)return;
+  var html='<header>'+rook+'<h1>Control room</h1><small>Rookery '+esc(D.version)+(D.settings.maintenance?' <span class="pill bad">Maintenance on</span>':'')+'</small><span class="who">'+esc(ME)+' '+(isOwner()?'<span class="pill play">Owner</span>':rolePill(ROLE))+'</span><a class="btn" href="./" target="_blank" rel="noopener">Open Rookery</a><button class="btn" data-act="logout">Sign out</button></header><nav class="tabs" id="tabsbar">'+tabsHTML()+'</nav>';
+  html+='<main>'+({overview:overview,live:live,players:playersTab,games:gamesTab,analytics:analyticsTab,chat:chatTab,reports:reportsTab,moderation:moderationTab,logs:logsTab,server:serverTab}[tab]||overview)()+'</main>';
+  var y=window.scrollY;app.innerHTML=html;window.scrollTo(0,y);}
+function kpi(l,v,s){return '<div class="card kpi"><small>'+l+'</small><b>'+v+'</b><span>'+s+'</span></div>';}
+function overview(){var d=D,s=d.samples,last=s[s.length-1]||{cpu:0},memUsed=d.memTotal-d.memFree,disk=d.disk,u=d.upt||{};
+  var act=d.activity,mx=Math.max(1,Math.max.apply(null,act.map(function(a){return Math.max(a.games,a.signups);})));
+  var bars='<div class="bars">'+act.map(function(a){var dt=new Date(a.day);return '<div title="'+dt.toDateString()+': '+a.games+' games, '+a.signups+' new accounts"><i style="height:'+(a.games/mx*100)+'%"></i><i class="s" style="height:'+(a.signups/mx*100)+'%"></i><small>'+dt.getDate()+'</small></div>';}).join('')+'</div><div class="legend"><span><i></i>Games</span><span><i class="s"></i>New accounts</span></div>';
+  return '<div class="grid">'+kpi('Online now',d.counts.online,d.counts.playing+' playing, '+d.counts.queued+' searching, '+d.counts.spect+' watching')+kpi('Accounts',d.counts.accounts,d.counts.guests+' guests, '+d.counts.banned+' suspended')+kpi('Games played',d.counts.games,d.counts.gamesToday+' today, '+(d.dailyCount||0)+' daily games running')+
+     '<div class="card kpi"><small>Uptime, last 7 days</small><b>'+(u.percent!=null?u.percent+'%':'–')+'</b><span>'+(u.internetOk===false?'<span style="color:var(--loss)">Internet is down right now</span>':'Internet OK'+(u.lastOk?', checked '+ago(u.lastOk):''))+'</span><div class="meter"><i class="'+(u.percent<99?'hot':'')+'" style="width:'+(u.percent||0)+'%"></i></div></div></div>'+
+   '<div class="grid" style="margin-top:12px">'+
+   '<div class="card kpi"><small>Processor</small><b>'+last.cpu.toFixed(0)+'%</b><span>'+d.cores+' cores</span>'+spark(s,'cpu',100,'#c9a45c')+'</div>'+
+   '<div class="card kpi"><small>Memory</small><b>'+bytes(memUsed)+'</b><span>of '+bytes(d.memTotal)+', Rookery uses '+bytes(d.rss)+'</span>'+spark(s,'mem',100,'#7aa3c9')+'</div>'+
+   '<div class="card kpi"><small>Storage'+(disk&&disk.list&&disk.list.length>1?', '+disk.list.length+' drives':'')+'</small><b>'+(disk?bytes(disk.free):'–')+'</b><span>free of '+(disk?bytes(disk.total):'–')+'</span><div class="meter"><i class="'+(disk&&(disk.total-disk.free)/disk.total>.9?'hot':'')+'" style="width:'+(disk?((disk.total-disk.free)/disk.total*100).toFixed(1):0)+'%"></i></div></div>'+
+   '<div class="card kpi"><small>Running for</small><b>'+dur(d.procUptime)+'</b><span>Computer on for '+dur(d.uptime)+'</span>'+spark(s,'online',Math.max(4,Math.max.apply(null,s.map(function(x){return x.online;}))),'#80b98c')+'</div></div>'+
+   '<div class="cols"><div class="stack"><div class="card"><h2>Last 14 days</h2>'+bars+'</div>'+(isMod()?'':broadcastCard())+'</div><div class="stack"><div class="card"><h2>Recent activity<span class="sp"></span>'+(isMod()?'':'<button class="btn sm" data-tab="logs">Server log</button>')+'</h2>'+auditList(d.audit.slice(0,8))+'</div>'+staffCard()+'</div></div>';}
+function broadcastCard(){return '<div class="card"><h2>Message everyone online</h2><p class="note" style="margin-bottom:10px">Pops up on every open Rookery screen right now. For a lasting notice use the announcement in Moderation.</p><form data-form="broadcast" class="row"><input id="bcIn" maxlength="300" placeholder="Rematch tournament starts in 10 minutes" aria-label="Message"><button class="btn brass" type="submit">Send to all</button></form></div>';}
+function staffCard(){var S=D.staff||[];return '<div class="card"><h2>Staff<span class="n">'+S.length+'</span></h2>'+(S.length?'<table class="tbl"><tbody>'+S.map(function(p){return '<tr class="clk" data-player="'+p.id+'"><td>'+esc(p.name)+'</td><td>'+rolePill(p.role)+'</td><td style="text-align:right">'+(p.online?'<span class="pill on">Online</span>':'<span class="pill">Offline</span>')+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">No moderators yet. Open a player and give them a role'+(isOwner()?'':' (owner only)')+'.</p>')+'</div>';}
+function auditList(a){return a.length?'<table class="tbl"><tbody>'+a.map(function(x){return '<tr><td>'+esc(x.action)+(x.detail?' <span style="color:var(--muted)">'+esc(x.detail)+'</span>':'')+'</td><td style="text-align:right;color:var(--dim);white-space:nowrap">'+ago(x.ts)+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">Nothing yet.</p>';}
+function live(){var L=D.live;if(!L.length)return '<div class="card"><p class="empty">No games right now. Live games show up here with the position, the clocks and a button to watch.</p></div>';
+  return '<div class="live">'+L.map(function(g){return '<div class="card"><div class="pl"><b>'+ttl(g.black.title)+esc(g.black.name)+' <span>'+g.black.rating+'</span></b><span>'+(g.tc!=='none'?clock(g.clock[1]):'')+'</span></div>'+mini(g.fen,g.last)+'<div class="pl"><b>'+ttl(g.white.title)+esc(g.white.name)+' <span>'+g.white.rating+'</span></b><span>'+(g.tc!=='none'?clock(g.clock[0]):'')+'</span></div>'+
+    '<p class="fine" style="margin:8px 0 10px">'+esc(g.tc)+(g.rated?' rated':' casual')+', move '+Math.ceil(g.n/2)+', '+g.spect+' watching</p>'+
+    '<div class="row"><a class="btn pri sm" href="./?watch='+g.gid+'#watch" target="_blank" rel="noopener">Watch</a><button class="btn sm" data-end="'+g.gid+'" data-r="aborted" data-confirm="Abort this game? Ratings stay the same.">Abort</button></div>'+
+    '<div class="row" style="margin-top:6px"><button class="btn sm" data-end="'+g.gid+'" data-r="1-0" data-confirm="Give the win to White?">White wins</button><button class="btn sm" data-end="'+g.gid+'" data-r="0-1" data-confirm="Give the win to Black?">Black wins</button><button class="btn sm" data-end="'+g.gid+'" data-r="1/2-1/2" data-confirm="Declare a draw?">Draw</button></div></div>';}).join('')+'</div>';}
+
+/* ----- players ----- */
+function playersTab(){
+  var kinds=[['all','All'],['accounts','Accounts'],['guests','Guests'],['online','Online'],['staff','Staff'],['banned','Suspended'],['muted','Chat off']];
+  var top='<div class="row" style="margin-bottom:12px"><div class="seg">'+kinds.map(function(k){return '<button class="'+(pkind===k[0]?'on':'')+'" data-kind="'+k[0]+'">'+k[1]+'</button>';}).join('')+'</div><span class="sp"></span>'+
+    '<select id="psort" aria-label="Sort" style="width:auto"><option value="seen">Last seen</option><option value="created">Newest</option><option value="name">Name</option><option value="blitz">Blitz rating</option><option value="games">Most games</option></select></div>';
+  var pages=Math.ceil(pcount/PLIM),page=Math.floor(poff/PLIM)+1;
+  var tools=isMod()?'':'<div class="cols" style="margin-top:16px"><div class="card"><h2>Create an account</h2><form class="row" data-form="createacct"><input id="caU" maxlength="20" placeholder="Username" aria-label="Username"><input id="caP" type="text" minlength="6" placeholder="Password" aria-label="Password"><button class="btn pri" type="submit">Create</button></form><p class="fine" style="margin-top:8px">Give the username and password to the player. They can change the password later.</p></div>'+
+    '<div class="card"><h2>Tidy up</h2><p class="note" style="margin-bottom:10px">Removes guests who never played a game and have not been back.</p><form class="row" data-form="cleanguests"><select id="cgDays" aria-label="Inactive for"><option value="3">Inactive 3 days</option><option value="7" selected>Inactive 7 days</option><option value="30">Inactive 30 days</option></select><button class="btn" type="submit">Remove old guests</button></form></div></div>';
+  return '<div class="card"><h2>Players<span class="n">'+pcount+'</span><span class="sp"></span>'+(isMod()?'':'<button class="btn sm" data-act="csv">Export CSV</button>')+'</h2><form class="row" data-form="psearch" style="margin-bottom:12px"><input id="pq" placeholder="Search by name, id or network address" value="'+esc(q)+'" aria-label="Search players"><button class="btn" type="submit">Search</button></form>'+top+
+   (players.length?'<div class="scroll"><table class="tbl"><thead><tr><th>Name</th><th>Status</th><th>Bullet</th><th>Blitz</th><th>Rapid</th><th class="hide-sm">Daily</th><th class="hide-sm">Puzzles</th><th class="hide-sm">Games</th><th class="hide-sm">Wins</th><th class="hide-sm">Joined</th><th class="hide-sm">Last seen</th></tr></thead><tbody>'+players.map(function(p){
+    var st=p.banned?'<span class="pill bad">'+(p.banUntil?'Until '+new Date(p.banUntil).toLocaleDateString():'Suspended')+'</span>':p.playing?'<span class="pill play">Playing</span>':p.online?'<span class="pill on">Online</span>':'<span class="pill">Offline</span>';
+    return '<tr class="clk" data-player="'+p.id+'"><td>'+ttl(p.title)+esc(p.name)+(p.country?' '+flag(p.country):'')+' '+rolePill(p.role)+(p.guest?' <span class="pill">Guest</span>':'')+(p.muted?' <span class="pill bad">Chat off</span>':'')+'</td><td>'+st+'</td><td>'+p.ratings.bullet+'</td><td>'+p.ratings.blitz+'</td><td>'+p.ratings.rapid+'</td><td class="hide-sm">'+p.daily+'</td><td class="hide-sm">'+p.puzzle+'</td><td class="hide-sm">'+p.games+'</td><td class="hide-sm">'+p.wins+'</td><td class="hide-sm">'+new Date(p.created).toLocaleDateString()+'</td><td class="hide-sm">'+ago(p.seen||p.created)+'</td></tr>';}).join('')+'</tbody></table></div>':'<p class="empty">No players match.</p>')+
+   (pages>1?'<div class="row" style="margin-top:12px;justify-content:space-between"><button class="btn sm" data-page="-1"'+(page<=1?' disabled':'')+'>Previous</button><span class="note">Page '+page+' of '+pages+'</span><button class="btn sm" data-page="1"'+(page>=pages?' disabled':'')+'>Next</button></div>':'')+
+   '<p class="fine" style="margin-top:10px">Click a player to see everything about them and '+(isMod()?'moderate the account.':'edit any part of the account.')+'</p></div>'+tools;}
+function gamesTab(){var G=gamesRows;
+  return '<div class="card"><h2>Finished games</h2><form class="row" data-form="gsearch" style="margin-bottom:12px"><input id="gq" placeholder="Search by player name or game id" value="'+esc(gq)+'" aria-label="Search games"><button class="btn" type="submit">Search</button></form>'+
+   (!G?'<p class="empty">Loading…</p>':G.length?'<div class="scroll"><table class="tbl"><thead><tr><th>White</th><th>Black</th><th>Result</th><th class="hide-sm">Time</th><th class="hide-sm">Moves</th><th class="hide-sm">Played</th><th></th></tr></thead><tbody>'+G.map(function(g){
+    return '<tr><td>'+esc(g.w.name)+' <span style="color:var(--dim)">'+g.w.r+'</span></td><td>'+esc(g.b.name)+' <span style="color:var(--dim)">'+g.b.r+'</span></td><td>'+(isMod()?esc(g.result):resultSel(g.id,g.result))+' <span style="color:var(--dim)">'+esc(g.reason)+'</span></td><td class="hide-sm">'+esc(tcName(g.tc))+(g.rated?'':' casual')+'</td><td class="hide-sm">'+Math.ceil(g.n/2)+'</td><td class="hide-sm">'+ago(g.end)+'</td><td class="acts"><a class="btn sm" href="./?game='+g.id+'#review" target="_blank" rel="noopener">Review</a>'+(isMod()?'':'<button class="btn sm bad" data-delgame="'+g.id+'" data-confirm="Delete this game from the history? Ratings stay as they are.">Delete</button>')+'</td></tr>';}).join('')+'</tbody></table></div>':'<p class="empty">No games found.</p>')+(isMod()?'':'<p class="fine" style="margin-top:10px">Changing a result rewrites the game record. Ratings stay as they are; adjust them in the player\'s details if needed.</p>')+'</div>';}
+function tcName(tc){return /^d\d+$/.test(tc||'')?tc.slice(1)+' day daily':tc;}
+function resultSel(id,r){return '<select class="rsel" data-gres="'+id+'" aria-label="Result"><option value="1-0"'+(r==='1-0'?' selected':'')+'>1-0</option><option value="0-1"'+(r==='0-1'?' selected':'')+'>0-1</option><option value="1/2-1/2"'+(r==='1/2-1/2'?' selected':'')+'>½-½</option></select>';}
+
+/* ----- analytics ----- */
+function analyticsTab(){var A=AN;if(!A)return '<div class="card"><p class="empty">Loading…</p></div>';
+  var hmax=1;A.heat.forEach(function(r){r.forEach(function(v){if(v>hmax)hmax=v;});});
+  var days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var heat='<div class="heat"><span></span>'+Array.from({length:24},function(_,h){return '<small>'+(h%3===0?h:'')+'</small>';}).join('')+A.heat.map(function(r,d){return '<small class="dl">'+days[d]+'</small>'+r.map(function(v,h){return '<i title="'+days[d]+' '+h+':00, '+v+' game'+(v===1?'':'s')+'" style="opacity:'+(v?(.18+.82*v/hmax).toFixed(2):'.06')+'"></i>';}).join('');}).join('')+'</div><p class="fine" style="margin-top:8px">Games finished in the last 90 days by day and hour, server time.</p>';
+  var tcs=Object.keys(A.tcs).map(function(k){return [k,A.tcs[k]];}).sort(function(a,b){return b[1]-a[1];}),tmax=tcs.length?tcs[0][1]:1;
+  var tcBars=tcs.length?tcs.slice(0,10).map(function(t){return '<div class="hbar"><span>'+esc(tcName(t[0]))+'</span><i style="width:'+(t[1]/tmax*100)+'%"></i><b>'+t[1]+'</b></div>';}).join(''):'<p class="empty">No games yet.</p>';
+  var rs=Object.keys(A.reasons).map(function(k){return [k,A.reasons[k]];}).sort(function(a,b){return b[1]-a[1];});
+  var R=A.res,rt=Math.max(1,R.w+R.b+R.d);
+  var dev=A.devices,dt=Math.max(1,dev.phone+dev.computer);
+  var dmx=Math.max(1,Math.max.apply(null,A.days.map(function(x){return Math.max(x.active,x.peak);})));
+  var dbars='<div class="bars b30">'+A.days.map(function(x){var dd=new Date(x.day);return '<div title="'+dd.toDateString()+': '+x.active+' active players, peak '+x.peak+' online"><i style="height:'+(x.active/dmx*100)+'%"></i><i class="s" style="height:'+(x.peak/dmx*100)+'%"></i><small>'+(dd.getDate()%5===1?dd.getDate():'')+'</small></div>';}).join('')+'</div><div class="legend"><span><i></i>Active players</span><span><i class="s"></i>Peak online</span></div>';
+  return '<div class="grid">'+kpi('Average game',A.avgMoves+' moves','per finished game')+kpi('Players who return',A.retention!=null?A.retention+'%':'–',A.retentionBase?'of '+A.retentionBase+' accounts older than 2 days':'Needs accounts older than 2 days')+kpi('Puzzles solved',A.puzzlesSolved.toLocaleString(),'by all accounts')+kpi('Achievements',A.achievements,'earned in total')+'</div>'+
+   '<div class="cols"><div class="stack"><div class="card"><h2>Busiest hours</h2>'+heat+'</div><div class="card"><h2>Last 30 days</h2>'+dbars+'</div></div>'+
+   '<div class="stack"><div class="card"><h2>Time controls</h2>'+tcBars+'</div>'+
+   '<div class="card"><h2>Results</h2><div class="split"><i class="w" style="flex:'+R.w+'"></i><i class="d" style="flex:'+R.d+'"></i><i class="b" style="flex:'+R.b+'"></i></div><div class="legend" style="margin-top:10px"><span><i class="w"></i>White '+Math.round(R.w/rt*100)+'%</span><span><i class="d"></i>Draw '+Math.round(R.d/rt*100)+'%</span><span><i class="b"></i>Black '+Math.round(R.b/rt*100)+'%</span></div>'+
+     '<h2 style="margin-top:16px">How games end</h2>'+(rs.length?'<table class="tbl"><tbody>'+rs.slice(0,8).map(function(r){return '<tr><td>'+esc(r[0])+'</td><td style="text-align:right">'+r[1]+'</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">No games yet.</p>')+'</div>'+
+   '<div class="card"><h2>Devices, last 30 days</h2><div class="split"><i class="d2" style="flex:'+dev.computer+'"></i><i class="w" style="flex:'+dev.phone+'"></i></div><div class="legend" style="margin-top:10px"><span><i class="d2"></i>Computer '+Math.round(dev.computer/dt*100)+'%</span><span><i class="w"></i>Phone '+Math.round(dev.phone/dt*100)+'%</span></div></div>'+
+   '<div class="card"><h2>Most active players</h2>'+(A.top.length?'<table class="tbl"><tbody>'+A.top.map(function(p,i){return '<tr class="clk" data-player="'+p.id+'"><td style="color:var(--dim);width:24px">'+(i+1)+'</td><td>'+esc(p.name)+'</td><td style="text-align:right">'+p.games+' games</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">No accounts yet.</p>')+'</div></div></div>';}
+function chatTab(){var C=D.chat;
+  return '<div class="card"><h2>Live chat<span class="n">last '+C.length+' messages</span><span class="sp"></span>'+(D.settings.chat?'':'<span class="pill bad">Chat is off for everyone</span>')+'</h2>'+(C.length?C.map(function(c){return '<div class="chatline"><time>'+new Date(c.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'</time><span><b data-player="'+c.pid+'">'+esc(c.name)+':</b> '+esc(c.text)+'</span><button class="btn sm" data-pa="mute" data-id="'+c.pid+'">Turn off chat</button></div>';}).join(''):'<p class="empty">No messages since the server started.</p>')+'</div>';}
+function reportsTab(){var R=D.reports;
+  return '<div class="card"><h2>Reports<span class="n">'+R.length+'</span></h2>'+(R.length?R.map(function(r){return '<div class="rep"><div class="row"><b data-player="'+r.who+'" style="cursor:pointer">'+esc(r.whoName)+'</b><span class="note">reported by '+esc(r.byName)+', '+ago(r.ts)+'</span></div>'+(r.chat&&r.chat.length?'<div class="chat">'+r.chat.map(function(c){return '<div><b>'+esc(c.name)+':</b> '+esc(c.text)+'</div>';}).join('')+'</div>':'')+'<div class="row"><button class="btn sm" data-pa="mute" data-id="'+r.who+'">Turn off chat</button><button class="btn sm bad" data-player="'+r.who+'">Suspend…</button><button class="btn sm" data-rep="'+r.id+'">Dismiss</button></div></div>';}).join(''):'<p class="empty">No open reports.</p>')+'</div>';}
+
+/* ----- moderation ----- */
+function moderationTab(){var F=D.filter||{words:[]},d=D;
+  return '<div class="cols"><div class="stack"><div class="card"><h2>Word filter<span class="sp"></span><button class="tog'+(F.enabled?' on':'')+'" data-filtertog aria-pressed="'+!!F.enabled+'" aria-label="Word filter"></button></h2>'+
+   '<p class="note" style="margin-bottom:10px">Blocked words are replaced with stars in game chat, private messages and bios. Players who keep using them get their chat turned off automatically.</p>'+
+   '<form data-form="filter" style="display:grid;gap:10px"><label class="lbl">Blocked words, one per line ('+F.words.length+')<textarea id="fw" rows="10" spellcheck="false">'+esc(F.words.join('\n'))+'</textarea></label>'+
+   '<div class="row"><label class="lbl" style="flex:1">Turn chat off after<select id="fs">'+[0,1,2,3,5,10].map(function(n){return '<option value="'+n+'"'+(F.strikes===n?' selected':'')+'>'+(n?n+' blocked word'+(n>1?'s':''):'Never')+'</option>';}).join('')+'</select></label>'+
+   '<label class="lbl" style="flex:1">For<select id="fh">'+[[1,'1 hour'],[6,'6 hours'],[24,'1 day'],[72,'3 days'],[168,'7 days'],[720,'30 days']].map(function(x){return '<option value="'+x[0]+'"'+(F.muteHours===x[0]?' selected':'')+'>'+x[1]+'</option>';}).join('')+'</select></label></div>'+
+   '<div class="row"><button class="btn pri" type="submit">Save filter</button></div></form></div>'+
+   '<div class="card"><h2>Announcement</h2><p class="note" style="margin-bottom:10px">Shown to everyone online and on the home page for 24 hours.</p><form data-form="announce" style="display:grid;gap:8px"><textarea id="at" maxlength="200" rows="2" placeholder="Server restarts at 2 am for an update" aria-label="Announcement">'+esc(d.announce?d.announce.text:'')+'</textarea><div class="row"><button class="btn pri" type="submit">Publish</button>'+(d.announce?'<button class="btn" type="button" data-act="unannounce">Remove</button>':'')+'</div></form></div></div>'+
+   '<div class="stack">'+broadcastCard()+staffCard()+'<div class="card"><h2>Roles</h2><dl><dt>Owner</dt><dd>Everything, including server settings, restarts, backups and giving roles.</dd><dt>Admin</dt><dd>Everything about players and games: edit accounts, ratings, records and achievements, word filter, analytics and logs.</dd><dt>Moderator</dt><dd>Turns chat off, disconnects, suspends for up to 7 days, sends messages and handles reports. Cannot act on staff.</dd></dl><p class="fine" style="margin-top:10px">Staff sign in here with their own Rookery username and password.</p></div></div></div>';}
+
+/* ----- logs ----- */
+function logsTab(){var L=LOGS;if(!L)return '<div class="card"><p class="empty">Loading…</p></div>';
+  var lq=logQ.toLowerCase(),rows=L.filter(function(x){return (!logErr||x.err)&&(!lq||x.line.toLowerCase().indexOf(lq)>=0);}).slice().reverse();
+  var ne=L.filter(function(x){return x.err;}).length;
+  return '<div class="card"><h2>Server log<span class="n">'+L.length+' recent lines</span><span class="sp"></span><button class="btn sm" data-act="reloadlogs">Refresh</button></h2>'+
+   '<div class="row" style="margin-bottom:12px"><div class="seg"><button class="'+(logErr?'':'on')+'" data-logs="all">Everything</button><button class="'+(logErr?'on':'')+'" data-logs="err">Errors'+(ne?' ('+ne+')':'')+'</button></div><form data-form="logq" class="row" style="flex:1"><input id="lq" placeholder="Filter lines" value="'+esc(logQ)+'" aria-label="Filter"><button class="btn" type="submit">Filter</button></form></div>'+
+   (rows.length?'<div class="logs">'+rows.map(function(x){return '<div class="'+(x.err?'e':'')+'"><time>'+new Date(x.ts).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})+'</time><span>'+esc(x.line)+'</span></div>';}).join('')+'</div>':'<p class="empty">'+(logErr?'No errors. ':'')+'Nothing to show.</p>')+'</div>';}
+
+/* ----- server ----- */
+function serverTab(){var d=D,st=d.settings,pz=d.puzzles,ps=pz.status||{};
+  function tg(k,t,s,warn){return '<div class="set"><div><b>'+t+'</b><small>'+s+'</small></div><button class="tog'+(warn?' warn':'')+(st[k]?' on':'')+'" data-setting="'+k+'" aria-pressed="'+!!st[k]+'" aria-label="'+t+'"></button></div>';}
+  var pzLine=pz.source==='lichess'?pz.count.toLocaleString()+' puzzles from Lichess':'Built-in set of '+pz.count+' puzzles';
+  if(ps.state==='running')pzLine='Downloading: '+ps.found+' found, '+ps.mb+' MB read';
+  if(ps.state==='error')pzLine+='. The last download failed: '+esc(ps.error);
+  return '<div class="cols"><div class="stack">'+
+   '<div class="card"><h2>Rules</h2>'+tg('maintenance','Maintenance mode','Stops new online games and shows a notice. Games in progress finish normally.',true)+tg('signups','New accounts','Let people create accounts')+tg('guestsOnline','Guests can play online','When off, only players with an account can play online')+tg('chat','Game chat','Let players message each other during games')+'</div>'+
+   uptimeCard(d.upt)+
+   '<div class="card"><h2>Blocked network addresses<span class="n">'+d.ipBans.length+'</span></h2><p class="note" style="margin-bottom:10px">Blocks every account and guest from an address. Find addresses in a player\'s details.</p><form class="row" data-form="ipban" style="margin-bottom:8px"><input id="ipIn" placeholder="Address" aria-label="Address"><input id="ipWhy" placeholder="Reason (optional)" aria-label="Reason"><button class="btn bad" type="submit">Block</button></form>'+
+     (d.ipBans.length?'<table class="tbl"><tbody>'+d.ipBans.map(function(b){return '<tr><td>'+esc(b.ip)+(b.reason?' <span style="color:var(--muted)">'+esc(b.reason)+'</span>':'')+'</td><td style="color:var(--dim)">'+ago(b.ts)+'</td><td class="acts"><button class="btn sm" data-unip="'+esc(b.ip)+'">Unblock</button></td></tr>';}).join('')+'</tbody></table>':'')+'</div>'+
+   '<div class="card"><h2>Admin log</h2>'+auditList(d.audit)+'</div>'+
+  '</div><div class="stack">'+
+   '<div class="card"><h2>Computer</h2><dl><dt>Name</dt><dd>'+esc(d.host)+'</dd><dt>System</dt><dd>'+esc(d.platform)+'</dd><dt>Processor</dt><dd>'+esc(d.cpuModel||'')+'</dd><dt>Node.js</dt><dd>'+esc(d.node)+'</dd><dt>Rookery</dt><dd>'+esc(d.version)+', running for '+dur(d.procUptime)+'</dd></dl></div>'+
+   updCard(d.updater)+storageCard(d.disk)+backupCard(d.backup)+restoreCard()+
+   '<div class="card"><h2>Puzzles</h2><p class="note" style="margin-bottom:10px">'+pzLine+'</p><button class="btn" data-act="puzzles"'+(ps.state==='running'?' disabled':'')+'>'+(pz.source==='lichess'?'Download again':'Download puzzles')+'</button></div>'+
+   '<div class="card"><h2>Restart</h2><p class="note" style="margin-bottom:10px">Restarts Rookery. Players reconnect by themselves within a few seconds and games in progress continue.</p><button class="btn bad" data-act="restart" data-confirm="Restart the server now?">Restart Rookery</button></div>'+
+   '<div class="card"><h2>Admin password</h2><form class="row" data-form="adminpw"><input id="np" type="password" minlength="8" placeholder="New password" autocomplete="new-password" aria-label="New admin password"><button class="btn" type="submit">Change</button></form></div>'+
+  '</div></div>';}
+function uptimeCard(u){u=u||{events:[]};var T={crash:'Rookery crashed',down:'Server was off',internet:'Internet connection lost',restart:'Restarted'};
+  return '<div class="card"><h2>Uptime<span class="sp"></span><span class="pill '+(u.internetOk===false?'bad':'on')+'">'+(u.internetOk===false?'Internet down':'Online')+'</span></h2>'+
+   '<div class="row" style="align-items:baseline;gap:14px"><b style="font:500 34px/1 var(--serif)">'+(u.percent!=null?u.percent+'%':'–')+'</b><span class="note">over the last 7 days'+(u.since?', watching since '+new Date(u.since).toLocaleDateString():'')+'</span></div>'+
+   '<div class="meter"><i class="'+(u.percent<99?'hot':'')+'" style="width:'+(u.percent||0)+'%"></i></div>'+
+   (u.events&&u.events.length?'<table class="tbl" style="margin-top:12px"><tbody>'+u.events.slice(0,12).map(function(e){return '<tr><td>'+esc(T[e.type]||e.type)+(e.note?' <span style="color:var(--muted)">'+esc(e.note)+'</span>':'')+'</td><td style="color:var(--dim);white-space:nowrap">'+new Date(e.from).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+'</td><td style="text-align:right;white-space:nowrap">'+dur(Math.max(60,(e.to-e.from)/1000))+'</td></tr>';}).join('')+'</tbody></table>':'<p class="fine" style="margin-top:10px">No outages recorded. Power cuts, crashes and lost internet show up here.</p>')+'</div>';}
+function restoreCard(){var B=BK;
+  return '<div class="card"><h2>Restore from a backup</h2><p class="note" style="margin-bottom:10px">Puts every account, rating and game back the way it was in that copy. A fresh backup of the current data is made first, then Rookery restarts.</p>'+
+   (!B?'<p class="empty">Loading…</p>':B.files.length?'<div class="scroll" style="max-height:260px"><table class="tbl"><tbody>'+B.files.map(function(f){return '<tr><td>'+new Date(f.ts).toLocaleString([], {weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+'</td><td style="color:var(--dim)">'+bytes(f.size)+'</td><td class="acts"><button class="btn sm bad" data-restore="'+esc(f.file)+'" data-confirm="Restore this backup and restart? Changes since then are replaced.">Restore</button></td></tr>';}).join('')+'</tbody></table></div><p class="fine" style="margin-top:8px">'+esc(B.dir)+'</p>':'<p class="empty">No backups in '+esc(B.dir)+' yet.</p>')+'</div>';}
+function storageCard(dk){if(!dk||!dk.list)return '';
+  return '<div class="card"><h2>Storage<span class="sp"></span><span class="n">'+bytes(dk.free)+' free of '+bytes(dk.total)+'</span></h2>'+dk.list.map(function(x){var used=(x.total-x.free)/x.total*100;return '<div style="margin-bottom:12px"><div class="row" style="justify-content:space-between"><b>'+esc(x.name)+(x.here?' <span class="pill on">Rookery runs here</span>':'')+(x.system&&!x.here?' <span class="pill">Windows</span>':'')+'</b><span class="note">'+bytes(x.free)+' free of '+bytes(x.total)+'</span></div><div class="meter"><i class="'+(used>90?'hot':'')+'" style="width:'+used.toFixed(1)+'%"></i></div></div>';}).join('')+'<p class="fine">Rookery itself needs very little space. The other drives hold the automatic backups.</p></div>';}
+function backupCard(b){b=b||{};
+  return '<div class="card"><h2>Backups<span class="sp"></span>'+(b.error?'<span class="pill bad">Last backup failed</span>':b.last?'<span class="pill on">Daily backup on</span>':'<span class="pill">First backup soon</span>')+'</h2><p class="note" style="margin-bottom:10px">Every account, rating and game is copied once a day. The last '+(b.keep||14)+' copies are kept.</p>'+
+   '<dl><dt>Folder</dt><dd>'+esc(b.folder||'–')+'</dd><dt>Last copy</dt><dd>'+(b.last?ago(b.last):'Not yet')+'</dd>'+(b.error?'<dt>Problem</dt><dd>'+esc(b.error)+'</dd>':'')+'</dl>'+
+   '<form class="row" data-form="backupdir" style="margin-top:12px"><input id="bdir" placeholder="Folder, like E:\\Rookery-backups" value="'+esc(b.dir||'')+'" aria-label="Backup folder"><button class="btn" type="submit">Save folder</button></form><p class="fine" style="margin-top:6px">Leave empty to pick a drive automatically.</p>'+
+   '<div class="row" style="margin-top:12px"><button class="btn" data-act="backupnow">Back up now</button><button class="btn pri" data-act="backup">Download a copy</button></div></div>';}
+function updCard(u){
+  if(!u)return '<div class="card"><h2>Automatic updates</h2><p class="note">Not set up yet. Start the updater once with <b>pm2 start updater.js --name rookery-updater</b> and Rookery keeps itself up to date.</p></div>';
+  var st=u.error?'<span class="pill bad">Last check failed</span>':!u.running?'<span class="pill bad">Updater not running</span>':u.sha&&u.sha===u.latest?'<span class="pill on">Up to date</span>':'<span class="pill play">Updating</span>';
+  return '<div class="card"><h2>Automatic updates<span class="sp"></span>'+st+'</h2><dl><dt>Source</dt><dd>github.com/'+esc(u.repo)+'</dd><dt>Version</dt><dd>'+(u.sha?esc(u.sha.slice(0,7))+(u.lastUpdateMessage?', '+esc(u.lastUpdateMessage):''):'–')+'</dd><dt>Updated</dt><dd>'+ago(u.lastUpdate)+'</dd><dt>Last check</dt><dd>'+ago(u.lastCheck)+'</dd>'+(u.error?'<dt>Problem</dt><dd>'+esc(u.error)+'</dd>':'')+'</dl><div class="row" style="margin-top:12px"><button class="btn" data-act="checkupdate">Check now</button></div></div>';}
+
+/* ----- player drawer ----- */
+function openPlayer(id){drawerId=id;api('player?id='+encodeURIComponent(id)).then(drawer).catch(function(e){toast(e.message);});}
+function closeDrawer(){drawerId=null;P=null;var s=document.querySelector('.scrim');if(s)s.remove();}
+function num(name,val,min,max){return '<label>'+name.label+'<input type="number" min="'+min+'" max="'+max+'" data-k="'+name.k+'" value="'+val+'"></label>';}
+function drawer(p){var keep=document.querySelector('.drawer'),sy=keep?keep.scrollTop:0,same=P&&P.id===p.id;closeDrawer();drawerId=p.id;P=p;var s=document.createElement('div');s.className='scrim';
+  var R=p.ratings,staff=!!p.role,mod=isMod(),canEdit=!mod&&!(ROLE==='admin'&&p.role==='admin');
+  var st=p.banned?'<span class="pill bad">Suspended'+(p.banUntil?' until '+new Date(p.banUntil).toLocaleString():'')+'</span>':p.playing?'<span class="pill play">Playing</span>':p.online?'<span class="pill on">Online</span>':'<span class="pill">Offline</span>';
+  var ach=p.ach||{},achN=Object.keys(ach).length,AL=D.achList||[];
+  var h='<aside class="drawer" role="dialog" aria-label="Player details"><button class="x" data-act="close" aria-label="Close">×</button><h3>'+ttl(p.title)+esc(p.name)+(p.country?' <span style="font-size:.7em">'+flag(p.country)+'</span>':'')+'</h3><div class="row" style="margin-top:8px">'+st+rolePill(p.role)+(p.guest?'<span class="pill">Guest</span>':'<span class="pill">Account</span>')+(p.muted?'<span class="pill bad">Chat off'+(p.muteUntil?' until '+new Date(p.muteUntil).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'')+'</span>':'')+(p.reports?'<span class="pill bad">'+p.reports+' report'+(p.reports>1?'s':'')+'</span>':'')+(p.strikes?'<span class="pill">'+p.strikes+' filtered word'+(p.strikes>1?'s':'')+'</span>':'')+'</div>'+
+   (p.bio?'<p class="note" style="margin-top:12px;color:var(--bone2)">'+esc(p.bio)+'</p>':'')+
+   (p.playing?'<div class="row" style="margin-top:12px"><a class="btn pri sm" href="./?watch='+p.playing+'#watch" target="_blank" rel="noopener">Watch their game</a></div>':'');
+  if(canEdit&&!p.guest)h+='<section class="hero2"><h4>Make them the top player</h4><p class="fine">Sets every rating (bullet, blitz, rapid, daily) to the value below, raises puzzles to at least that, gives every achievement and the title.</p><div class="row"><input id="mxV" type="number" min="100" max="3500" value="3000" aria-label="Rating" style="max-width:110px"><input id="mxT" maxlength="16" value="'+esc(p.title||'GM')+'" aria-label="Title" style="max-width:120px"><button class="btn brass" data-act="max" data-confirm="Set every rating of '+esc(p.name)+' to this value and give all achievements?">Make top player</button></div></section>';
+  h+='<section><h4>Details</h4><dl><dt>Joined</dt><dd>'+new Date(p.created).toLocaleDateString()+'</dd><dt>Last seen</dt><dd>'+ago(p.seen)+(p.device?', on a '+esc(p.device):'')+'</dd>'+(mod?'':'<dt>Network address</dt><dd>'+esc(p.lastIp||'–')+(p.ips.length>1?' <span style="color:var(--dim)">(also '+p.ips.slice(1).map(esc).join(', ')+')</span>':'')+'</dd>')+'<dt>Signed in on</dt><dd>'+p.sessions+' device'+(p.sessions===1?'':'s')+'</dd><dt>Friends</dt><dd>'+(p.friends.length?p.friends.map(esc).join(', '):'None')+'</dd><dt>Daily games</dt><dd>'+(p.daily||0)+' running</dd><dt>Win streak</dt><dd>'+(p.streak||0)+' now, best '+(p.bestStreak||0)+'</dd>'+(p.banReason?'<dt>Suspension reason</dt><dd>'+esc(p.banReason)+'</dd>':'')+'<dt>Id</dt><dd>'+esc(p.id)+'</dd></dl></section>';
+  if(!mod&&p.linked&&p.linked.length)h+='<section><h4>Same network address</h4><div class="row">'+p.linked.map(function(o){return '<button class="btn sm" data-player="'+o.id+'">'+esc(o.name)+(o.guest?' (guest)':'')+'</button>';}).join('')+'</div></section>';
+  if(canEdit){
+    h+='<section><h4>Profile</h4><form class="egrid" data-form="eprofile"><label>Name<input id="eName" maxlength="20" value="'+esc(p.name)+'"></label><label>Title<input id="eTitle" maxlength="16" placeholder="GM, VIP, Founder" value="'+esc(p.title||'')+'"></label>'+
+      '<label class="full">Bio<textarea id="eBio" maxlength="300" rows="2">'+esc(p.bio||'')+'</textarea></label>'+
+      '<label>Country<select id="eCountry"><option value="">None</option>'+COUNTRIES.map(function(c){return '<option value="'+c[0]+'"'+(p.country===c[0]?' selected':'')+'>'+flag(c[0])+' '+esc(c[1])+'</option>';}).join('')+'</select></label>'+
+      '<label>Joined<input id="eCreated" type="date" value="'+new Date(p.created).toISOString().slice(0,10)+'"></label>'+
+      '<label>Avatar piece<select id="eAvP">'+[['k','King'],['q','Queen'],['r','Rook'],['b','Bishop'],['n','Knight'],['p','Pawn']].map(function(x){return '<option value="'+x[0]+'"'+(p.avatar&&p.avatar.p===x[0]?' selected':'')+'>'+x[1]+'</option>';}).join('')+'</select></label>'+
+      '<label>Avatar color<select id="eAvC">'+['Slate','Moss','Ochre','Plum','Brick','Teal','Ivory','Ink'].map(function(n,i){return '<option value="'+i+'"'+(p.avatar&&p.avatar.c===i?' selected':'')+'>'+n+'</option>';}).join('')+'</select></label>'+
+      '<div class="full row"><button class="btn pri" type="submit">Save profile</button></div></form></section>';
+    h+='<section><h4>Ratings and record</h4><div class="scroll"><table class="tbl etbl"><thead><tr><th></th><th>Rating</th><th>Best</th><th>Won</th><th>Lost</th><th>Drawn</th></tr></thead><tbody>'+CATS.map(function(c){var r=R[c];return '<tr data-cat="'+c+'"><td>'+CATN[c]+'</td>'+['r','peak','w','l','d'].map(function(k){return '<td><input type="number" min="'+(k==='r'||k==='peak'?100:0)+'" max="'+(k==='r'||k==='peak'?3500:1000000)+'" data-k="'+k+'" value="'+r[k]+'" aria-label="'+CATN[c]+' '+k+'"></td>';}).join('')+'</tr>';}).join('')+'</tbody></table></div>'+
+      '<div class="egrid" id="ePz"><label>Puzzle rating<input type="number" min="100" max="3500" data-k="r" value="'+p.puzzleStats.r+'"></label><label>Puzzles solved<input type="number" min="0" data-k="solved" value="'+p.puzzleStats.solved+'"></label><label>Puzzles failed<input type="number" min="0" data-k="failed" value="'+p.puzzleStats.failed+'"></label><label>Best puzzle streak<input type="number" min="0" data-k="best" value="'+p.puzzleStats.best+'"></label>'+
+      '<label>Win streak<input id="eStreak" type="number" min="0" value="'+(p.streak||0)+'"></label><label>Best win streak<input id="eBest" type="number" min="0" value="'+(p.bestStreak||0)+'"></label></div>'+
+      '<div class="row"><button class="btn pri" data-act="saverecord">Save ratings and record</button><button class="btn" data-pa="reset" data-id="'+p.id+'" data-confirm="Reset all game ratings to 1200?">Reset to 1200</button><button class="btn" data-act="clearhist" data-confirm="Clear the rating history chart?">Clear rating chart</button></div><p class="fine">Games played is worked out from won, lost and drawn.</p></section>';
+    h+='<section><h4>Achievements <span style="font-weight:400;color:var(--dim)">'+achN+' of '+AL.length+'</span></h4><div class="achgrid" id="eAch">'+AL.map(function(a){return '<label title="'+esc(a[2])+'"><input type="checkbox" value="'+a[0]+'"'+(ach[a[0]]?' checked':'')+'><span>'+esc(a[1])+'</span></label>';}).join('')+'</div><div class="row"><button class="btn pri" data-act="saveach">Save achievements</button><button class="btn sm" data-act="achall">Tick all</button><button class="btn sm" data-act="achnone">Untick all</button></div></section>';
+  }
+  if(isOwner()&&!p.guest)h+='<section><h4>Staff role</h4><div class="row"><select id="eRole"><option value=""'+(!p.role?' selected':'')+'>Player</option><option value="mod"'+(p.role==='mod'?' selected':'')+'>Moderator</option><option value="admin"'+(p.role==='admin'?' selected':'')+'>Admin</option></select><button class="btn" data-act="saverole">Save role</button></div><p class="fine">Staff sign in to this control room with their own username and password.</p></section>';
+  h+='<section><h4>Message</h4><form class="row" data-form="msg"><input id="msgIn" maxlength="300" placeholder="'+(p.online?'Shown to them right away':'They are offline')+'" aria-label="Message"'+(p.online?'':' disabled')+'><button class="btn" type="submit"'+(p.online?'':' disabled')+'>Send</button></form></section>';
+  if(mod&&staff)h+='<section><p class="note">This is a staff account. Moderators cannot act on staff.</p></section>';
+  else{
+    h+='<section><h4>Chat and connection</h4><div class="row">'+(p.muted?'<button class="btn" data-pa="unmute" data-id="'+p.id+'">Allow chat</button>':'<select id="muteH" style="max-width:160px" aria-label="Turn chat off for"><option value="1">For 1 hour</option><option value="24" selected>For 1 day</option><option value="168">For 7 days</option>'+(mod?'':'<option value="0">Until I allow it</option>')+'</select><button class="btn" data-act="mute">Turn off chat</button>')+(p.online?'<button class="btn" data-pa="kick" data-id="'+p.id+'">Disconnect</button>':'')+(mod?'':'<button class="btn" data-pa="logout" data-id="'+p.id+'">Sign out everywhere</button>'+(p.guest?'':'<button class="btn" data-act="temppw" data-confirm="Create a new temporary password? They will be signed out everywhere.">Reset password</button>'))+'</div><div id="tempBox"></div></section>';
+    h+='<section><h4>Suspension</h4>'+(p.banned?'<div class="row"><button class="btn pri" data-pa="unban" data-id="'+p.id+'">Lift suspension</button></div>':'<form style="display:grid;gap:8px" data-form="ban"><div class="row"><select id="banFor" aria-label="Length"><option value="60">1 hour</option><option value="1440">1 day</option><option value="10080">7 days</option>'+(mod?'':'<option value="43200">30 days</option><option value="0">Permanent</option>')+'</select><input id="banWhy" maxlength="120" placeholder="Reason, shown to the player" aria-label="Reason"></div><div class="row"><button class="btn bad" type="submit">Suspend</button>'+(p.lastIp&&isOwner()?'<button class="btn bad" type="button" data-blockip="'+esc(p.lastIp)+'" data-confirm="Block every account from '+esc(p.lastIp)+'?">Block their address</button>':'')+'</div></form>')+'</section>';}
+  h+='<section><h4>Recent games</h4>'+(p.games.length?'<table class="tbl"><tbody>'+p.games.map(function(g){var c=g.color,o=c?g.white:g.black,sc=g.result==='1/2-1/2'?'Draw':((g.result==='1-0')===(c===0)?'Won':'Lost');
+      var ctl=canEdit?'<span class="seg sm">'+[['W','Win'],['D','Draw'],['L','Loss']].map(function(x){var on=(x[0]==='W'&&sc==='Won')||(x[0]==='D'&&sc==='Draw')||(x[0]==='L'&&sc==='Lost');return '<button class="'+(on?'on':'')+'" data-gwin="'+g.id+'" data-c="'+c+'" data-o="'+x[0]+'">'+x[1]+'</button>';}).join('')+'</span>':'<b>'+sc+'</b>';
+      return '<tr><td>'+ctl+'</td><td>vs '+esc(o.name)+'<br><span style="color:var(--dim);font-size:12px">'+esc(tcName(g.tc))+', '+esc(g.reason)+', '+ago(g.ts)+'</span></td><td class="acts"><a class="btn sm" href="./?game='+g.id+'#review" target="_blank" rel="noopener">Review</a></td></tr>';}).join('')+'</tbody></table>'+(canEdit?'<p class="fine">Win, draw or loss is from '+esc(p.name)+'\'s side and rewrites the game record. To change their totals, edit Won, Lost and Drawn above.</p>':''):'<p class="empty">No finished games.</p>')+'</section>';
+  if(canEdit)h+='<section><h4>Danger zone</h4><div class="row"><button class="btn bad" data-pa="delete" data-id="'+p.id+'" data-confirm="Delete '+esc(p.name)+' and their ratings for good?">Delete account</button></div></section>';
+  s.innerHTML=h+'</aside>';
+  document.body.appendChild(s);
+  if(same){var dr=s.querySelector('.drawer');dr.style.animation='none';dr.scrollTop=sy;}
+  s.addEventListener('pointerdown',function(e){if(e.target===s)closeDrawer();});
+  s.addEventListener('click',onClick);s.addEventListener('submit',onSubmit);}
+function reloadDrawer(){if(drawerId)openPlayer(drawerId);}
+function edit(data,msg){return api('player',{id:drawerId,action:'edit',data:data}).then(done(msg||'Saved')).catch(fail);}
+
+/* ----- events ----- */
+function confirmFirst(b){if(!b.dataset.confirm||armed===b)return true;armed=b;b._txt=b.textContent;b.textContent='Click again to confirm';setTimeout(function(){if(armed===b){armed=null;b.textContent=b._txt;}},3500);return false;}
+function done(msg){return function(){toast(msg||'Done');refresh();loadPlayers();reloadDrawer();};}
+function fail(e){toast(e.message);}
+function download(path,name){return fetch('api/admin/'+path,{headers:{Authorization:'Bearer '+tok}}).then(function(r){if(!r.ok)throw new Error('Download failed');return r.blob();}).then(function(bl){var u=URL.createObjectURL(bl),l=document.createElement('a');l.href=u;l.download=name;document.body.appendChild(l);l.click();l.remove();setTimeout(function(){URL.revokeObjectURL(u);},2000);});}
+function onClick(e){var b=e.target.closest('button,[data-player],a');if(!b)return;
+  if(b.tagName==='A')return;
+  if(b.dataset.tab){setTab(b.dataset.tab);return;}
+  if(b.dataset.kind){pkind=b.dataset.kind;poff=0;loadPlayers();render();return;}
+  if(b.dataset.page){poff=Math.max(0,poff+(+b.dataset.page)*PLIM);loadPlayers();return;}
+  if(b.dataset.logs){logErr=b.dataset.logs==='err';render();return;}
+  if(b.dataset.player&&!b.dataset.pa){openPlayer(b.dataset.player);return;}
+  if(b.hasAttribute('data-filtertog')){api('filter',{enabled:!D.filter.enabled}).then(function(){D.filter.enabled=!D.filter.enabled;toast('Saved');render();}).catch(fail);return;}
+  if(!confirmFirst(b))return;armed=null;
+  var a=b.dataset.act;
+  if(a==='logout')return logout();
+  if(a==='close')return closeDrawer();
+  if(b.dataset.pa){var act=b.dataset.pa;api('player',{id:b.dataset.id,action:act}).then(function(){toast('Done');if(act==='delete')closeDrawer();refresh();loadPlayers();if(act!=='delete')reloadDrawer();}).catch(fail);return;}
+  if(b.dataset.gwin){var c=+b.dataset.c,o=b.dataset.o,res=o==='D'?'1/2-1/2':((o==='W')===(c===0)?'1-0':'0-1');api('gameedit',{id:b.dataset.gwin,result:res,reason:o==='D'?'agreement':'resignation'}).then(done('Game result changed')).catch(fail);return;}
+  if(b.dataset.end){api('endgame',{gid:b.dataset.end,result:b.dataset.r}).then(done('Game ended')).catch(fail);return;}
+  if(b.dataset.delgame){api('deletegame',{id:b.dataset.delgame}).then(function(){toast('Game deleted');loadGames();}).catch(fail);return;}
+  if(b.dataset.restore){api('restore',{file:b.dataset.restore}).then(function(){toast('Restored. Rookery is restarting.');setTimeout(function(){location.reload();},6000);}).catch(fail);return;}
+  if(b.dataset.rep){api('report',{id:b.dataset.rep}).then(done('Report dismissed')).catch(fail);return;}
+  if(b.dataset.setting){var k=b.dataset.setting;api('settings',{key:k,value:!D.settings[k]}).then(function(){D.settings[k]=!D.settings[k];toast('Saved');refresh();render();}).catch(fail);return;}
+  if(b.dataset.unip){api('ipban',{ip:b.dataset.unip,remove:true}).then(done('Address unblocked')).catch(fail);return;}
+  if(b.dataset.blockip){api('ipban',{ip:b.dataset.blockip,reason:'Blocked from player details'}).then(done('Address blocked')).catch(fail);return;}
+  if(a==='unannounce')return api('announce',{text:''}).then(done('Announcement removed')).catch(fail);
+  if(a==='puzzles')return api('puzzles',{}).then(function(){toast('Download started');setTimeout(refresh,1500);}).catch(fail);
+  if(a==='backupnow')return api('backupnow',{}).then(function(){toast('Backup saved');refresh();loadBackups();}).catch(fail);
+  if(a==='checkupdate')return api('checkupdate',{}).then(function(){toast('Checking for updates');setTimeout(refresh,8000);}).catch(fail);
+  if(a==='restart')return api('restart',{}).then(function(){toast('Restarting. This page reconnects by itself.');}).catch(fail);
+  if(a==='backup')return download('backup','rookery-backup-'+new Date().toISOString().slice(0,10)+'.json').then(function(){toast('Backup downloaded');}).catch(fail);
+  if(a==='csv')return download('players.csv','rookery-players.csv').then(function(){toast('Player list downloaded');}).catch(fail);
+  if(a==='reloadlogs')return loadLogs();
+  if(a==='max')return api('player',{id:drawerId,action:'max',value:+document.getElementById('mxV').value,title:document.getElementById('mxT').value}).then(done('They are now the top player')).catch(fail);
+  if(a==='clearhist')return api('player',{id:drawerId,action:'clearhist'}).then(done('Rating chart cleared')).catch(fail);
+  if(a==='saverole')return api('player',{id:drawerId,action:'role',role:document.getElementById('eRole').value}).then(done('Role saved')).catch(fail);
+  if(a==='mute')return api('player',{id:drawerId,action:'mute',hours:+document.getElementById('muteH').value}).then(done('Chat turned off')).catch(fail);
+  if(a==='achall'||a==='achnone'){document.querySelectorAll('#eAch input').forEach(function(i){i.checked=a==='achall';});return;}
+  if(a==='saveach'){var ids=[];document.querySelectorAll('#eAch input:checked').forEach(function(i){ids.push(i.value);});return edit({ach:ids},'Achievements saved');}
+  if(a==='saverecord'){var ratings={},pz={};document.querySelectorAll('.etbl tr[data-cat]').forEach(function(tr){var o={};tr.querySelectorAll('input').forEach(function(i){o[i.dataset.k]=+i.value;});ratings[tr.dataset.cat]=o;});
+    document.querySelectorAll('#ePz input[data-k]').forEach(function(i){pz[i.dataset.k]=+i.value;});
+    return edit({ratings:ratings,puzzle:pz,streak:+document.getElementById('eStreak').value,bestStreak:+document.getElementById('eBest').value},'Ratings and record saved');}
+  if(a==='temppw')return api('player',{id:drawerId,action:'password'}).then(function(r){document.getElementById('tempBox').innerHTML='<p class="note">New temporary password. Give it to the player privately; they can change it after signing in.</p><div class="temp">'+esc(r.temp)+'</div>';toast('Password reset');}).catch(fail);}
+function onChange(e){var t=e.target;
+  if(t.id==='psort'){psort=t.value;poff=0;loadPlayers();return;}
+  if(t.dataset&&t.dataset.gres){api('gameedit',{id:t.dataset.gres,result:t.value}).then(function(){toast('Result changed');loadGames();}).catch(fail);}}
+function onSubmit(e){var f=e.target.closest('form');if(!f)return;e.preventDefault();var k=f.dataset.form,v=function(id){var el=document.getElementById(id);return el?el.value:'';};
+  if(k==='psearch'){q=v('pq').trim();poff=0;loadPlayers();return;}
+  if(k==='gsearch'){gq=v('gq').trim();loadGames();return;}
+  if(k==='logq'){logQ=v('lq').trim();render();return;}
+  if(k==='announce')return api('announce',{text:v('at')}).then(done('Announcement published')).catch(fail);
+  if(k==='broadcast')return api('broadcast',{text:v('bcIn')}).then(function(r){toast('Sent to '+r.n+' player'+(r.n===1?'':'s'));document.getElementById('bcIn').value='';}).catch(fail);
+  if(k==='filter')return api('filter',{words:v('fw').split(/\r?\n/),strikes:+v('fs'),muteHours:+v('fh')}).then(done('Word filter saved')).catch(fail);
+  if(k==='createacct')return api('createaccount',{username:v('caU').trim(),password:v('caP')}).then(function(r){toast('Account created');document.getElementById('caU').value='';document.getElementById('caP').value='';loadPlayers();openPlayer(r.id);}).catch(fail);
+  if(k==='cleanguests')return api('cleanguests',{days:+v('cgDays')}).then(function(r){toast(r.n+' old guest'+(r.n===1?'':'s')+' removed');refresh();loadPlayers();}).catch(fail);
+  if(k==='ipban')return api('ipban',{ip:v('ipIn'),reason:v('ipWhy')}).then(done('Address blocked')).catch(fail);
+  if(k==='adminpw')return api('password',{password:v('np')}).then(function(r){tok=r.token;try{sessionStorage.setItem('rk-admin',tok);}catch(er){}toast('Admin password changed');document.getElementById('np').value='';}).catch(fail);
+  if(k==='msg')return api('player',{id:drawerId,action:'message',text:v('msgIn')}).then(function(){toast('Message sent');document.getElementById('msgIn').value='';}).catch(fail);
+  if(k==='eprofile'){var d={name:v('eName').trim(),title:v('eTitle'),bio:v('eBio'),country:v('eCountry'),avatar:{p:v('eAvP'),c:+v('eAvC')}};if(v('eCreated'))d.created=v('eCreated');return edit(d,'Profile saved');}
+  if(k==='backupdir')return api('backupdir',{dir:v('bdir')}).then(done('Backup folder saved')).catch(fail);
+  if(k==='ban')return api('player',{id:drawerId,action:'ban',minutes:+v('banFor'),reason:v('banWhy')}).then(done('Player suspended')).catch(fail);}
+app.addEventListener('click',onClick);app.addEventListener('submit',onSubmit);document.addEventListener('change',onChange);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDrawer();});
+if(tok)start();else loginView();
+})();

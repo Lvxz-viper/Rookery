@@ -1,7 +1,30 @@
-# Rookery 2.0
+# Rookery 3.0
 
-Chess server for your home computer: the website, online games, accounts, friends, spectating,
-puzzles, Stockfish analysis and an admin dashboard.
+Chess server for your home computer: the website, online games, daily (correspondence) games,
+accounts, friends, private messages, achievements, spectating, puzzles, an opening trainer,
+Stockfish analysis and a control room.
+
+## What is new in 3.0
+
+- Daily chess with 1, 3 or 7 days per move, open games and invitations
+- Private messages between friends
+- 22 achievements, bios, countries and opening statistics on profiles
+- Share links for every game and animated GIF replays
+- Opening trainer that drills the main lines move by move
+- Control room: full account editor (ratings, record, achievements, game results, profile),
+  moderators and admins, word filter with automatic chat bans, analytics, server log,
+  uptime monitoring and restore from backup
+
+## Staff roles
+
+The owner signs in to `/admin` with the admin password. Give a player the Moderator or Admin role
+from their details; they then sign in to `/admin` with their own Rookery username and password.
+
+| Role | Can do |
+|---|---|
+| Owner | Everything, including server settings, restarts, backups and roles |
+| Admin | Edit any account, ratings, records, achievements and game results, word filter, analytics, logs |
+| Moderator | Turn chat off, disconnect, suspend for up to 7 days, message players, handle reports |
 
 ## Update from version 1
 
@@ -50,6 +73,7 @@ See its status in the control room under Server, or with `pm2 logs rookery-updat
 - `server.js` the server (port 3001, change with `set PORT=4000`)
 - `core.js` chess rules, shared with the website; every move is checked on the server
 - `puzzles.js` built-in puzzles and the Lichess downloader
+- `client/` the website source; `node tools/build.js` builds it into `public/index.html`
 - `public/` the website, the admin page, Stockfish and fonts
 - `data/` accounts, games, puzzles and the admin password. Back this folder up.
 

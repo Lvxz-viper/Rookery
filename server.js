@@ -1,6 +1,7 @@
 'use strict';
 /* Rookery server v2: website, live games, accounts, friends, spectating, puzzles and the admin API. */
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -9,7 +10,7 @@ const zlib = require('zlib');
 const vm = require('vm');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '2.2.0';
+const VERSION = '3.0.0';
 const PORT = +process.env.PORT || 3001;
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
@@ -20,7 +21,13 @@ vm.runInThisContext(fs.readFileSync(path.join(ROOT, 'core.js'), 'utf8'), { filen
 const KEYF = path.join(DATA, 'internal.key');
 if (!fs.existsSync(KEYF)) fs.writeFileSync(KEYF, crypto.randomBytes(24).toString('hex'));
 const INTERNAL_KEY = fs.readFileSync(KEYF, 'utf8').trim();
-const log = (...a) => console.log(new Date().toISOString().slice(0, 19).replace('T', ' '), ...a);
+const logBuf = [];
+const log = (...a) => {
+  const line = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' ' + a.map(x => typeof x === 'string' ? x : (x && x.stack) || JSON.stringify(x)).join(' ');
+  console.log(line);
+  logBuf.push({ ts: Date.now(), line, err: /error|fail|crash/i.test(line) });
+  if (logBuf.length > 800) logBuf.shift();
+};
 const puzzles = require('./puzzles')(DATA, log);
 
 /* ================= time controls ================= */
@@ -33,19 +40,22 @@ function tcInfo(key) {
   const cat = est < 180 ? 'bullet' : est < 480 ? 'blitz' : 'rapid';
   return { key, base: m * 60000, inc: i * 1000, cat, rated: true };
 }
-const CATS = ['bullet', 'blitz', 'rapid'];
+const CATS = ['bullet', 'blitz', 'rapid', 'daily'];
+const LIVE_CATS = ['bullet', 'blitz', 'rapid'];
+const DAILY_DAYS = [1, 3, 7];
 
 /* ================= storage ================= */
 const DBF = path.join(DATA, 'db.json');
 const GAMESF = path.join(DATA, 'games.jsonl');
-let db = { version: 2, players: {}, sessions: {}, names: {}, reports: [], announce: null, settings: {}, ipBans: {}, audit: [] };
+let db = { version: 2, players: {}, sessions: {}, names: {}, reports: [], announce: null, settings: {}, ipBans: {}, audit: [], daily: {}, dailyInvites: {}, dailySeeks: {}, dms: {}, stats: { dau: {}, peak: {} }, uptime: { events: [], since: null }, filter: null };
 const DEFAULT_SETTINGS = { maintenance: false, guestsOnline: true, signups: true, chat: true };
 
 function newRatings(r) { const o = {}; CATS.forEach(c => { o[c] = { r: r || 1200, games: 0, w: 0, l: 0, d: 0, peak: r || 1200 }; }); return o; }
 function newPlayer(id, name) {
   return { id, name, username: null, guest: true, pass: null, ratings: newRatings(1200), created: Date.now(), seen: Date.now(),
     avatar: { p: 'nkqrbp'[crypto.randomInt(6)], c: crypto.randomInt(8) }, friends: [], reqIn: [], reqOut: [], hist: [],
-    puzzle: { r: 1500, solved: 0, failed: 0, streak: 0, best: 0, recent: [] }, banned: false, muted: false };
+    puzzle: { r: 1500, solved: 0, failed: 0, streak: 0, best: 0, recent: [] }, banned: false, muted: false,
+    bio: '', country: '', role: '', ach: {}, streak: 0, bestStreak: 0 };
 }
 (function loadDb() {
   let raw = null;
@@ -66,6 +76,17 @@ function newPlayer(id, name) {
   } catch (e) {}
 })();
 db.settings = Object.assign({}, DEFAULT_SETTINGS, db.settings || {}); db.ipBans = db.ipBans || {}; db.audit = db.audit || [];
+['daily', 'dailyInvites', 'dailySeeks', 'dms'].forEach(k => { db[k] = db[k] || {}; });
+db.stats = Object.assign({ dau: {}, peak: {} }, db.stats || {});
+db.uptime = Object.assign({ events: [], since: null }, db.uptime || {});
+if (!db.uptime.since) db.uptime.since = Date.now();
+db.filter = Object.assign({ enabled: true, strikes: 3, muteHours: 24, words: [
+  'fuck', 'fucking', 'shit', 'bitch', 'cunt', 'asshole', 'bastard', 'dick', 'pussy', 'whore', 'slut', 'motherfucker',
+  'كس', 'زب', 'شرموط', 'شرموطة', 'منيوك', 'قحبة', 'خول', 'عرص', 'متناك', 'كسمك', 'كس امك', 'يلعن', 'ابن الكلب', 'ابن الحرام', 'زق'] }, db.filter || {});
+for (const p of Object.values(db.players)) {
+  for (const c of CATS) if (!p.ratings[c]) p.ratings[c] = { r: 1200, games: 0, w: 0, l: 0, d: 0, peak: 1200 };
+  p.ach = p.ach || {}; if (p.streak == null) p.streak = 0; if (p.bestStreak == null) p.bestStreak = 0;
+}
 // prune empty guests that have not been seen for 30 days
 (function prune() {
   const cut = Date.now() - 30 * 864e5, gone = new Set();
@@ -123,13 +144,14 @@ const online = pid => conns.has(pid);
 const gameOf = pid => { const g = games.get(activeOf.get(pid)); return g && !g.over ? g : null; };
 
 function pub(p, cat) {
-  return { id: p.id, name: p.name, guest: p.guest, avatar: p.avatar, title: p.title || null, rating: cat ? p.ratings[cat].r : undefined,
+  return { id: p.id, name: p.name, guest: p.guest, avatar: p.avatar, title: p.title || null, country: p.country || '', role: p.role || '', rating: cat ? p.ratings[cat].r : undefined,
     prov: cat ? p.ratings[cat].games < 10 : undefined };
 }
 function me(p) {
   return { id: p.id, name: p.name, username: p.username, guest: p.guest, avatar: p.avatar, ratings: p.ratings,
     puzzle: { r: p.puzzle.r, solved: p.puzzle.solved, failed: p.puzzle.failed, streak: p.puzzle.streak, best: p.puzzle.best },
-    hist: p.hist.slice(-400), created: p.created, muted: p.muted, title: p.title || null };
+    hist: p.hist.slice(-400), created: p.created, muted: isMuted(p), title: p.title || null, bio: p.bio || '', country: p.country || '', role: p.role || '',
+    ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, dmUnread: dmUnread(p.id), dailyTurn: dailyTurnCount(p.id) };
 }
 function status(pid) { const g = gameOf(pid); return g ? 'playing' : online(pid) ? 'online' : 'offline'; }
 function friendsPayload(p) {
@@ -137,6 +159,252 @@ function friendsPayload(p) {
   return { t: 'friends', list: p.friends.map(row).filter(Boolean), incoming: p.reqIn.map(row).filter(Boolean), outgoing: p.reqOut.map(row).filter(Boolean) };
 }
 function notifyFriends(pid) { const p = P(pid); if (!p) return; p.friends.forEach(f => { if (online(f)) sendP(f, friendsPayload(P(f))); }); }
+
+/* ================= moderation helpers ================= */
+function isMuted(p) {
+  if (p.muted && p.muteUntil && p.muteUntil < Date.now()) { p.muted = false; p.muteUntil = null; save(); }
+  return !!p.muted;
+}
+let filterRe = null, filterKey = '';
+function buildFilter() {
+  const words = (db.filter.words || []).map(w => String(w).trim()).filter(Boolean);
+  const key = words.join('|');
+  if (key === filterKey) return filterRe;
+  filterKey = key;
+  if (!words.length) return (filterRe = null);
+  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  filterRe = new RegExp('(^|[^\\p{L}\\p{N}])(' + words.sort((a, b) => b.length - a.length).map(esc).join('|') + ')(?=$|[^\\p{L}\\p{N}])', 'giu');
+  return filterRe;
+}
+/* masks bad words; counts strikes and mutes repeat offenders. Returns the cleaned text. */
+function filterText(text, p) {
+  if (!db.filter.enabled) return text;
+  const re = buildFilter(); if (!re) return text;
+  let hits = 0;
+  const out = text.replace(re, (m, pre, w) => { hits++; return pre + '*'.repeat([...w].length); });
+  if (hits && p) {
+    p.strikes = (p.strikes || 0) + 1;
+    if (db.filter.strikes > 0 && p.strikes >= db.filter.strikes) {
+      p.strikes = 0; p.muted = true; p.muteUntil = Date.now() + (db.filter.muteHours || 24) * 3600e3;
+      sendP(p.id, { t: 'info', msg: 'Chat is turned off for your account for ' + (db.filter.muteHours || 24) + ' hours because of repeated bad language.' });
+      log('[filter] muted ' + p.name);
+      db.audit.push({ ts: Date.now(), ip: 'server', action: 'auto mute', detail: p.name });
+    }
+    save();
+  }
+  return out;
+}
+
+/* ================= achievements ================= */
+const ACH = [
+  ['first_win', 'First victory', 'Win a rated game'], ['wins_10', 'Ten wins', 'Win 10 rated games'], ['wins_50', 'Fifty wins', 'Win 50 rated games'],
+  ['wins_100', 'Centurion', 'Win 100 rated games'], ['games_100', 'Regular', 'Play 100 rated games'], ['streak_5', 'On a roll', 'Win 5 rated games in a row'],
+  ['streak_10', 'Unstoppable', 'Win 10 rated games in a row'], ['giant', 'Giant slayer', 'Beat a player rated 200 or more above you'],
+  ['quick_mate', 'Quick finish', 'Checkmate your opponent in under 20 moves'], ['r1500', 'Club player', 'Reach 1500 in any rating'],
+  ['r1800', 'Expert', 'Reach 1800 in any rating'], ['r2000', 'Candidate master', 'Reach 2000 in any rating'], ['r2200', 'Master', 'Reach 2200 in any rating'],
+  ['pz10', 'Puzzle solver', 'Solve 10 puzzles'], ['pz100', 'Tactician', 'Solve 100 puzzles'], ['pz500', 'Puzzle master', 'Solve 500 puzzles'],
+  ['pzstreak10', 'Sharp eye', 'Solve 10 puzzles in a row'], ['pz2000', 'Puzzle expert', 'Reach a puzzle rating of 2000'],
+  ['friend1', 'Good company', 'Add your first friend'], ['friend10', 'Popular', 'Have 10 friends'],
+  ['daily_win', 'Patient player', 'Win a daily game'], ['daily_10', 'Correspondent', 'Finish 10 daily games']
+];
+const ACH_IDS = new Set(ACH.map(a => a[0]));
+function grant(p, id, quiet) {
+  if (!ACH_IDS.has(id) || (p.ach || (p.ach = {}))[id]) return false;
+  p.ach[id] = Date.now();
+  if (!quiet) { const a = ACH.find(x => x[0] === id); sendP(p.id, { t: 'achievement', id, name: a[1], desc: a[2] }); }
+  return true;
+}
+function checkAch(p) {
+  if (p.guest) return;
+  let wins = 0, played = 0, top = 0;
+  for (const c of CATS) { const r = p.ratings[c]; wins += r.w; played += r.games; top = Math.max(top, r.peak || r.r); }
+  const pz = p.puzzle, ch = [];
+  [[wins >= 1, 'first_win'], [wins >= 10, 'wins_10'], [wins >= 50, 'wins_50'], [wins >= 100, 'wins_100'], [played >= 100, 'games_100'],
+   [(p.bestStreak || 0) >= 5, 'streak_5'], [(p.bestStreak || 0) >= 10, 'streak_10'],
+   [top >= 1500, 'r1500'], [top >= 1800, 'r1800'], [top >= 2000, 'r2000'], [top >= 2200, 'r2200'],
+   [pz.solved >= 10, 'pz10'], [pz.solved >= 100, 'pz100'], [pz.solved >= 500, 'pz500'], [pz.best >= 10, 'pzstreak10'], [pz.r >= 2000, 'pz2000'],
+   [p.friends.length >= 1, 'friend1'], [p.friends.length >= 10, 'friend10'],
+   [p.ratings.daily.w >= 1, 'daily_win'], [p.ratings.daily.games >= 10, 'daily_10']].forEach(([ok, id]) => { if (ok && grant(p, id)) ch.push(id); });
+  if (ch.length) save();
+}
+
+/* ================= ratings shared by live and daily games ================= */
+function applyResult(W, B, cat, result, rated) {
+  const before = [W.ratings[cat].r, B.ratings[cat].r];
+  let after = before.slice();
+  if (result === 'aborted') return { before, after };
+  const s = result === '1-0' ? 1 : result === '0-1' ? 0 : 0.5;
+  if (rated) {
+    const ew = 1 / (1 + Math.pow(10, (before[1] - before[0]) / 400));
+    const k = r => (r.games < 10 ? 48 : r.games < 30 ? 32 : 20);
+    const rw = W.ratings[cat], rb = B.ratings[cat];
+    rw.r = Math.max(100, Math.round(rw.r + k(rw) * (s - ew)));
+    rb.r = Math.max(100, Math.round(rb.r + k(rb) * ((1 - s) - (1 - ew))));
+    after = [rw.r, rb.r];
+    [[rw, s], [rb, 1 - s]].forEach(([r, sc]) => { r.games++; if (sc === 1) r.w++; else if (sc === 0) r.l++; else r.d++; r.peak = Math.max(r.peak, r.r); });
+    W.hist.push([Date.now(), cat, rw.r]); B.hist.push([Date.now(), cat, rb.r]);
+    [W, B].forEach(x => { if (x.hist.length > 1500) x.hist.splice(0, x.hist.length - 1500); });
+    [[W, s], [B, 1 - s]].forEach(([x, sc]) => { if (sc === 1) { x.streak = (x.streak || 0) + 1; x.bestStreak = Math.max(x.bestStreak || 0, x.streak); } else x.streak = 0; });
+  }
+  return { before, after, s };
+}
+function afterGameAch(W, B, res, result, reason, plies, cat) {
+  if (result === 'aborted' || res.s == null) return;
+  [[W, B, res.s, 0], [B, W, 1 - res.s, 1]].forEach(([me_, opp, sc, i]) => {
+    if (sc === 1) {
+      if (res.before[i ^ 1] - res.before[i] >= 200) grant(me_, 'giant');
+      if (reason === 'checkmate' && plies < 40) grant(me_, 'quick_mate');
+    }
+    checkAch(me_);
+  });
+  save();
+}
+
+/* ================= private messages ================= */
+const dmKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+function dmUnread(pid) {
+  let n = 0;
+  for (const c of Object.values(db.dms)) { if (c.a !== pid && c.b !== pid) continue; const r = (c.read || {})[pid] || 0; for (let i = c.msgs.length - 1; i >= 0 && c.msgs[i].ts > r; i--) if (c.msgs[i].f !== pid) n++; }
+  return n;
+}
+function dmList(pid) {
+  const out = [];
+  for (const [k, c] of Object.entries(db.dms)) {
+    if (c.a !== pid && c.b !== pid) continue;
+    const other = P(c.a === pid ? c.b : c.a); if (!other) continue;
+    const last = c.msgs[c.msgs.length - 1]; const r = (c.read || {})[pid] || 0;
+    out.push({ id: other.id, who: pub(other, 'blitz'), online: online(other.id), last: last ? { text: last.t, ts: last.ts, mine: last.f === pid } : null,
+      unread: c.msgs.filter(m => m.ts > r && m.f !== pid).length });
+  }
+  return out.sort((a, b) => ((b.last && b.last.ts) || 0) - ((a.last && a.last.ts) || 0));
+}
+
+/* ================= daily (correspondence) games ================= */
+const dailyPos = new Map();
+function dPos(g) {
+  let p = dailyPos.get(g.id);
+  if (!p || p._n !== g.moves.length) { p = new Pos(); for (const u of g.moves) { const m = p.parseUci(u); if (m) p.make(m); } p._n = g.moves.length; dailyPos.set(g.id, p); }
+  return p;
+}
+function dailyView(g, pid) {
+  const pos = dPos(g);
+  return { gid: g.id, days: g.days, white: pub(P(g.w), 'daily'), black: pub(P(g.b), 'daily'), color: g.w === pid ? 0 : g.b === pid ? 1 : -1,
+    moves: g.moves, fen: pos.fen(), turn: pos.turn, deadline: g.deadline, created: g.created, last: g.last, over: g.over, drawFrom: g.drawOffer == null ? -1 : g.drawOffer,
+    online: [online(g.w), online(g.b)] };
+}
+function dailyGamesOf(pid) { return Object.values(db.daily).filter(g => g.w === pid || g.b === pid); }
+function dailyTurnCount(pid) { let n = 0; for (const g of dailyGamesOf(pid)) if (!g.over && dPos(g).turn === (g.w === pid ? 0 : 1)) n++; return n; }
+function dailySummaryFor(pid) {
+  return dailyGamesOf(pid).filter(g => !g.over || Date.now() - g.over.ts < 3 * 864e5)
+    .map(g => dailyView(g, pid)).sort((a, b) => (!!a.over - !!b.over) || ((b.color === b.turn) - (a.color === a.turn)) || a.deadline - b.deadline);
+}
+function sendDailyList(pid) {
+  sendP(pid, { t: 'daily_list', games: dailySummaryFor(pid),
+    invites: Object.values(db.dailyInvites).filter(i => i.to === pid || i.from === pid).map(i => ({ id: i.id, days: i.days, color: i.color, incoming: i.to === pid, who: pub(P(i.to === pid ? i.from : i.to), 'daily') })),
+    seeks: Object.values(db.dailySeeks).filter(x => P(x.by)).map(x => ({ id: x.id, days: x.days, color: x.color, mine: x.by === pid, by: pub(P(x.by), 'daily'), ts: x.ts })) });
+}
+function createDaily(a, b, days, pref) {
+  let w = a, bl = b;
+  if (pref === 'b' || (pref === 'r' && crypto.randomInt(2))) { w = b; bl = a; }
+  const g = { id: 'd' + rid(5), w, b: bl, days, moves: [], created: Date.now(), last: Date.now(), deadline: Date.now() + days * 864e5, over: null, drawOffer: null };
+  db.daily[g.id] = g; save();
+  [w, bl].forEach(x => { sendP(x, { t: 'daily_update', game: dailyView(g, x), fresh: true }); sendDailyList(x); });
+  log(`[daily ${g.id}] ${P(w).name} vs ${P(bl).name}, ${days} day(s) per move`);
+  return g;
+}
+function endDaily(g, result, reason) {
+  if (g.over) return;
+  g.over = { result, reason, ts: Date.now() };
+  const W = P(g.w), B = P(g.b);
+  if (!W || !B) { save(); return; }
+  const rated = g.moves.length >= 2 && result !== 'aborted';
+  const res = applyResult(W, B, 'daily', rated ? result : 'aborted', rated);
+  if (result !== 'aborted' && g.moves.length >= 2) {
+    storeRecord({ id: g.id, ts: g.created, end: Date.now(), tc: 'd' + g.days, cat: 'daily', rated: true, result, reason,
+      w: { id: W.id, name: W.name, r: res.before[0], a: res.after[0] }, b: { id: B.id, name: B.name, r: res.before[1], a: res.after[1] }, moves: g.moves, times: [] });
+  }
+  afterGameAch(W, B, res, result, reason, g.moves.length, 'daily');
+  save();
+  [g.w, g.b].forEach(x => { sendP(x, { t: 'daily_update', game: dailyView(g, x), ratings: [[res.before[0], res.after[0]], [res.before[1], res.after[1]]] }); sendP(x, { t: 'me', me: me(P(x)) }); sendDailyList(x); });
+  log(`[daily ${g.id}] ${result} by ${reason}`);
+}
+function dailyMove(pid, m) {
+  const g = db.daily[m.gid]; if (!g || g.over) return;
+  const c = g.w === pid ? 0 : g.b === pid ? 1 : -1; if (c < 0) return;
+  const pos = dPos(g);
+  if (pos.turn !== c) return sendP(pid, { t: 'daily_update', game: dailyView(g, pid) });
+  const mv = pos.parseUci(String(m.uci || ''));
+  if (!mv) return sendP(pid, { t: 'daily_update', game: dailyView(g, pid) });
+  const u = pos.uci(mv);
+  pos.make(mv); g.moves.push(u); pos._n = g.moves.length;
+  g.last = Date.now(); g.deadline = Date.now() + g.days * 864e5;
+  if (g.drawOffer === (c ^ 1)) g.drawOffer = null;
+  save();
+  const st = pos.status();
+  if (st.over) return endDaily(g, st.result, st.reason);
+  [g.w, g.b].forEach(x => sendP(x, { t: 'daily_update', game: dailyView(g, x), moved: x !== pid }));
+  const opp = c ? g.w : g.b; sendP(opp, { t: 'me', me: me(P(opp)) });
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const g of Object.values(db.daily)) {
+    if (g.over) { if (now - g.over.ts > 30 * 864e5) { delete db.daily[g.id]; dailyPos.delete(g.id); save(); } continue; }
+    if (g.deadline < now) {
+      const pos = dPos(g), side = pos.turn;
+      if (g.moves.length < 2) endDaily(g, 'aborted', 'aborted');
+      else if (!canMate(pos, side ^ 1)) endDaily(g, '1/2-1/2', 'timeout vs insufficient material');
+      else endDaily(g, side === 0 ? '0-1' : '1-0', 'timeout');
+    }
+  }
+  for (const [k, i] of Object.entries(db.dailyInvites)) if (now - i.ts > 7 * 864e5) delete db.dailyInvites[k];
+  for (const [k, x] of Object.entries(db.dailySeeks)) if (now - x.ts > 14 * 864e5 || !P(x.by)) delete db.dailySeeks[k];
+}, 60000);
+
+/* ================= activity stats and uptime ================= */
+const dayKey = (t) => { const d = new Date(t || Date.now()); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const activeToday = { day: dayKey(), set: new Set() };
+function markActive(pid) {
+  const k = dayKey(); if (activeToday.day !== k) { activeToday.day = k; activeToday.set = new Set(); }
+  activeToday.set.add(pid); db.stats.dau[k] = activeToday.set.size;
+  const pk = conns.size; if (pk > (db.stats.peak[k] || 0)) db.stats.peak[k] = pk;
+  const keys = Object.keys(db.stats.dau); if (keys.length > 120) keys.sort().slice(0, keys.length - 120).forEach(x => { delete db.stats.dau[x]; delete db.stats.peak[x]; });
+}
+function uptimeEvent(type, from, to, note) {
+  db.uptime.events.push({ type, from, to, note: note || '' });
+  if (db.uptime.events.length > 300) db.uptime.events.splice(0, db.uptime.events.length - 300);
+  save();
+}
+const HBF = path.join(DATA, 'heartbeat.json');
+(function bootUptime() {
+  let hb = null; try { hb = JSON.parse(fs.readFileSync(HBF, 'utf8')); } catch (e) {}
+  const now = Date.now();
+  if (hb && hb.ts) {
+    const gap = now - hb.ts;
+    if (hb.crash) uptimeEvent('crash', hb.ts, now, hb.crash.slice(0, 200));
+    else if (!hb.clean && gap > 90000) uptimeEvent('server', hb.ts, now, 'Rookery or the computer was off');
+    else if (hb.clean && gap > 5 * 60000) uptimeEvent('server', hb.ts, now, 'Rookery was stopped');
+  }
+})();
+function beat(extra) { try { fs.writeFileSync(HBF, JSON.stringify(Object.assign({ ts: Date.now() }, extra || {}))); } catch (e) {} }
+beat(); setInterval(beat, 30000);
+const net = { down: null, fails: 0, lastOk: null };
+function checkInternet() {
+  const req = https.request({ host: 'www.cloudflare.com', path: '/cdn-cgi/trace', method: 'GET', timeout: 8000 }, res => {
+    res.resume();
+    net.fails = 0; net.lastOk = Date.now();
+    if (net.down) { uptimeEvent('internet', net.down, Date.now(), 'Internet connection lost'); log('[uptime] internet is back'); net.down = null; }
+  });
+  const fail = () => { net.fails++; if (net.fails === 2 && !net.down) { net.down = Date.now() - 60000; log('[uptime] internet connection lost'); } };
+  req.on('timeout', () => { req.destroy(); }); req.on('error', fail); req.end();
+}
+if (process.env.NO_NET_CHECK !== '1') { setTimeout(checkInternet, 15000); setInterval(checkInternet, 60000); }
+function uptimeSummary() {
+  const now = Date.now(), span = 7 * 864e5, from = Math.max(now - span, db.uptime.since || now - span), total = Math.max(1, now - from);
+  let down = 0;
+  const evs = db.uptime.events.concat(net.down ? [{ type: 'internet', from: net.down, to: now, note: 'Internet connection lost (ongoing)' }] : []);
+  for (const e of evs) { const a = Math.max(e.from, from), b = Math.min(e.to, now); if (b > a) down += b - a; }
+  return { percent: Math.max(0, Math.round((1 - down / total) * 10000) / 100), since: db.uptime.since, events: evs.slice(-60).reverse(), internetOk: !net.down, lastOk: net.lastOk };
+}
 
 let statsT = null;
 function broadcastStats() {
@@ -245,22 +513,10 @@ function endGame(g, result, reason) {
   clearTimeout(g.timer); g.dc.forEach(x => x && clearTimeout(x));
   g.over = { result, reason };
   const W = P(g.w), B = P(g.b), cat = g.tc.cat;
-  const before = [W.ratings[cat].r, B.ratings[cat].r];
-  let after = before.slice();
-  if (result !== 'aborted' && g.tc.rated) {
-    const s = result === '1-0' ? 1 : result === '0-1' ? 0 : 0.5;
-    const ew = 1 / (1 + Math.pow(10, (before[1] - before[0]) / 400));
-    const k = r => (r.games < 10 ? 48 : r.games < 30 ? 32 : 20);
-    const rw = W.ratings[cat], rb = B.ratings[cat];
-    rw.r = Math.max(100, Math.round(rw.r + k(rw) * (s - ew)));
-    rb.r = Math.max(100, Math.round(rb.r + k(rb) * ((1 - s) - (1 - ew))));
-    after = [rw.r, rb.r];
-    [[rw, s], [rb, 1 - s]].forEach(([r, sc]) => { r.games++; if (sc === 1) r.w++; else if (sc === 0) r.l++; else r.d++; r.peak = Math.max(r.peak, r.r); });
-    W.hist.push([Date.now(), cat, rw.r]); B.hist.push([Date.now(), cat, rb.r]);
-    if (W.hist.length > 1500) W.hist.splice(0, W.hist.length - 1500);
-    if (B.hist.length > 1500) B.hist.splice(0, B.hist.length - 1500);
-    save();
-  }
+  const res = applyResult(W, B, cat, result, g.tc.rated && result !== 'aborted');
+  const before = res.before, after = res.after;
+  if (g.tc.rated) afterGameAch(W, B, res, result, reason, g.moves.length, cat);
+  save();
   if (result !== 'aborted') {
     storeRecord({ id: g.id, ts: g.created, end: Date.now(), tc: g.tc.key, cat, rated: g.tc.rated, result, reason,
       w: { id: W.id, name: W.name, r: before[0], a: after[0] }, b: { id: B.id, name: B.name, r: before[1], a: after[1] },
@@ -314,8 +570,10 @@ function attach(ws, pid) {
   ws.pid = pid;
   if (!conns.has(pid)) conns.set(pid, new Set());
   conns.get(pid).add(ws);
-  const p = P(pid); p.seen = Date.now();
+  const p = P(pid); p.seen = Date.now(); if (ws.device) p.device = ws.device;
+  markActive(pid);
   send(ws, { t: 'welcome', token: ws.token, me: me(p), cfg: publicCfg() });
+  if (!p.guest) setTimeout(() => sendDailyList(pid), 50);
   send(ws, friendsPayload(p));
   if (db.announce && Date.now() - db.announce.ts < 864e5) send(ws, { t: 'announce', text: db.announce.text, ts: db.announce.ts });
   const g = gameOf(pid);
@@ -437,6 +695,8 @@ async function handle(ws, m) {
     case 'profile': {
       if (m.avatar && 'kqrbnp'.includes(m.avatar.p) && m.avatar.p.length === 1 && m.avatar.c >= 0 && m.avatar.c < 8) p.avatar = { p: m.avatar.p, c: m.avatar.c | 0 };
       if (p.guest && m.name) { const n = cleanText(m.name, 20); if (n.length >= 2) p.name = n; }
+      if (typeof m.bio === 'string') { if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to write a bio.' }); p.bio = filterText(String(m.bio).replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 300), p); }
+      if (typeof m.country === 'string') p.country = /^[A-Z]{2}$/.test(m.country) ? m.country : '';
       save(); conns.get(pid).forEach(w => send(w, { t: 'me', me: me(p) })); return notifyFriends(pid);
     }
     /* ----- pairing ----- */
@@ -530,9 +790,10 @@ async function handle(ws, m) {
     case 'chat': {
       const g = games.get(m.gid); if (!g || (g.w !== pid && g.b !== pid)) return;
       if (!db.settings.chat) return send(ws, { t: 'info', msg: 'Chat is turned off on this server.' });
-      if (p.muted) return send(ws, { t: 'info', msg: 'Chat is turned off for your account.' });
+      if (isMuted(p)) return send(ws, { t: 'info', msg: 'Chat is turned off for your account' + (p.muteUntil ? ' until ' + new Date(p.muteUntil).toUTCString().replace(' GMT', ' UTC') : '') + '.' });
       const t = Date.now(); if (t - (ws.lastChat || 0) < 600) return; ws.lastChat = t;
-      const text = cleanText(m.text, 200); if (!text) return;
+      let text = cleanText(m.text, 200); if (!text) return;
+      text = filterText(text, p);
       const msg = { from: g.w === pid ? 0 : 1, name: p.name, text, ts: t };
       g.chat.push(msg); if (g.chat.length > 200) g.chat.shift();
       chatLog.push({ ts: t, gid: g.id, pid, name: p.name, text }); if (chatLog.length > 400) chatLog.shift();
@@ -583,7 +844,7 @@ async function handle(ws, m) {
       if (t.id === pid || p.friends.includes(t.id)) return;
       if (p.reqIn.includes(t.id)) { // they already asked: accept
         p.reqIn = p.reqIn.filter(x => x !== t.id); t.reqOut = t.reqOut.filter(x => x !== pid);
-        p.friends.push(t.id); t.friends.push(pid);
+        p.friends.push(t.id); t.friends.push(pid); checkAch(p); checkAch(t);
         save(); sendP(t.id, friendsPayload(t)); sendP(t.id, { t: 'info', msg: p.name + ' accepted your friend request' });
         return sendP(pid, friendsPayload(p));
       }
@@ -597,7 +858,7 @@ async function handle(ws, m) {
     case 'friend_decline': {
       const t = P(m.id); if (!t || !p.reqIn.includes(t.id)) return;
       p.reqIn = p.reqIn.filter(x => x !== t.id); t.reqOut = t.reqOut.filter(x => x !== pid);
-      if (m.t === 'friend_accept') { p.friends.push(t.id); t.friends.push(pid); sendP(t.id, { t: 'info', msg: p.name + ' accepted your friend request' }); }
+      if (m.t === 'friend_accept') { p.friends.push(t.id); t.friends.push(pid); checkAch(p); checkAch(t); sendP(t.id, { t: 'info', msg: p.name + ' accepted your friend request' }); }
       save(); sendP(t.id, friendsPayload(t)); return sendP(pid, friendsPayload(p));
     }
     case 'friend_remove': {
@@ -607,6 +868,82 @@ async function handle(ws, m) {
       save(); sendP(t.id, friendsPayload(t)); return sendP(pid, friendsPayload(p));
     }
     case 'leaderboard': return send(ws, { t: 'leaderboard', cat: CATS.includes(m.cat) ? m.cat : 'blitz', rows: leaderboard(m.cat) });
+    /* ----- profiles ----- */
+    case 'openings': {
+      const tid = m.id || pid, ids = (byPlayer.get(tid) || []).slice(-300);
+      return send(ws, { t: 'openings', id: tid, games: ids.map(id => { const r = records.get(id); if (!r) return null; const c = r.w.id === tid ? 0 : 1; const sc = r.result === '1/2-1/2' ? 0.5 : ((r.result === '1-0') === (c === 0) ? 1 : 0); return [r.moves.slice(0, 16), c, sc]; }).filter(Boolean) });
+    }
+    case 'ach_list': return send(ws, { t: 'ach_list', list: ACH });
+    /* ----- private messages ----- */
+    case 'dm_list': return send(ws, { t: 'dm_list', list: dmList(pid), unread: dmUnread(pid) });
+    case 'dm_open': {
+      const o = P(m.id); if (!o) return;
+      const c = db.dms[dmKey(pid, o.id)];
+      if (c) { (c.read || (c.read = {}))[pid] = Date.now(); save(); }
+      send(ws, { t: 'dm_thread', id: o.id, who: pub(o, 'blitz'), online: online(o.id), friend: p.friends.includes(o.id), msgs: c ? c.msgs.slice(-150) : [] });
+      return conns.get(pid).forEach(w => send(w, { t: 'dm_unread', n: dmUnread(pid) }));
+    }
+    case 'dm_send': {
+      const o = P(m.to); if (!o || o.id === pid) return;
+      if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to send messages.' });
+      if (!p.friends.includes(o.id)) return send(ws, { t: 'error', msg: 'You can message friends only.' });
+      if (isMuted(p)) return send(ws, { t: 'error', msg: 'Messages are turned off for your account.' });
+      const t = Date.now(); if (t - (ws.lastDm || 0) < 500) return; ws.lastDm = t;
+      let text = String(m.text || '').replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 1000); if (!text) return;
+      text = filterText(text, p);
+      const k = dmKey(pid, o.id), c = db.dms[k] || (db.dms[k] = { a: pid, b: o.id, msgs: [], read: {} });
+      const msg = { f: pid, t: text, ts: t }; c.msgs.push(msg); if (c.msgs.length > 400) c.msgs.splice(0, c.msgs.length - 400);
+      c.read[pid] = t; save();
+      sendP(pid, { t: 'dm', with: o.id, msg });
+      sendP(o.id, { t: 'dm', with: pid, from: pub(p, 'blitz'), msg });
+      return sendP(o.id, { t: 'dm_unread', n: dmUnread(o.id) });
+    }
+    /* ----- daily games ----- */
+    case 'daily_list': return sendDailyList(pid);
+    case 'daily_open': { const g = db.daily[m.gid]; if (!g) return send(ws, { t: 'error', msg: 'That daily game no longer exists.' }); return send(ws, { t: 'daily_update', game: dailyView(g, pid), open: true }); }
+    case 'daily_move': return dailyMove(pid, m);
+    case 'daily_resign': { const g = db.daily[m.gid]; if (!g || g.over || (g.w !== pid && g.b !== pid)) return; if (g.moves.length < 2) return endDaily(g, 'aborted', 'aborted'); return endDaily(g, g.w === pid ? '0-1' : '1-0', 'resignation'); }
+    case 'daily_draw': {
+      const g = db.daily[m.gid]; if (!g || g.over || (g.w !== pid && g.b !== pid) || g.moves.length < 2) return;
+      const c = g.w === pid ? 0 : 1;
+      if (g.drawOffer === (c ^ 1)) return endDaily(g, '1/2-1/2', 'agreement');
+      if (m.decline) { if (g.drawOffer === (c ^ 1)) g.drawOffer = null; }
+      else g.drawOffer = c;
+      save(); return [g.w, g.b].forEach(x => sendP(x, { t: 'daily_update', game: dailyView(g, x) }));
+    }
+    case 'daily_draw_decline': { const g = db.daily[m.gid]; if (!g || g.over) return; g.drawOffer = null; save(); return [g.w, g.b].forEach(x => sendP(x, { t: 'daily_update', game: dailyView(g, x) })); }
+    case 'daily_invite': {
+      if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to play daily games.' });
+      { const why = canStart(p); if (why) return send(ws, { t: 'error', msg: why }); }
+      const o = P(m.to); if (!o || o.guest || o.id === pid) return;
+      if (dailyGamesOf(pid).filter(g => !g.over).length >= 20) return send(ws, { t: 'error', msg: 'You can have up to 20 daily games at once.' });
+      const days = DAILY_DAYS.includes(+m.days) ? +m.days : 3, id = rid(4);
+      db.dailyInvites[id] = { id, from: pid, to: o.id, days, color: ['w', 'b', 'r'].includes(m.color) ? m.color : 'r', ts: Date.now() }; save();
+      sendDailyList(pid); sendDailyList(o.id);
+      sendP(o.id, { t: 'info', msg: p.name + ' invited you to a daily game' });
+      return send(ws, { t: 'info', msg: 'Invitation sent to ' + o.name });
+    }
+    case 'daily_invite_reply': {
+      const i = db.dailyInvites[m.id]; if (!i || (i.to !== pid && i.from !== pid)) return;
+      delete db.dailyInvites[i.id]; save();
+      if (m.accept && i.to === pid && P(i.from)) createDaily(i.from, i.to, i.days, i.color);
+      else { sendDailyList(i.from); sendDailyList(i.to); }
+      return;
+    }
+    case 'daily_seek': {
+      if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to play daily games.' });
+      { const why = canStart(p); if (why) return send(ws, { t: 'error', msg: why }); }
+      if (Object.values(db.dailySeeks).filter(x => x.by === pid).length >= 3) return send(ws, { t: 'error', msg: 'You already have 3 open daily games waiting.' });
+      const id = rid(4); db.dailySeeks[id] = { id, by: pid, days: DAILY_DAYS.includes(+m.days) ? +m.days : 3, color: ['w', 'b', 'r'].includes(m.color) ? m.color : 'r', ts: Date.now() }; save();
+      return sendDailyList(pid);
+    }
+    case 'daily_seek_cancel': { const x = db.dailySeeks[m.id]; if (x && x.by === pid) { delete db.dailySeeks[m.id]; save(); } return sendDailyList(pid); }
+    case 'daily_seek_accept': {
+      if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to play daily games.' });
+      const x = db.dailySeeks[m.id]; if (!x || x.by === pid || !P(x.by)) return send(ws, { t: 'error', msg: 'That game was already taken.' });
+      delete db.dailySeeks[x.id]; save();
+      return createDaily(x.by, pid, x.days, x.color);
+    }
     case 'search': {
       const q = String(m.q || '').trim().toLowerCase(); if (q.length < 2) return send(ws, { t: 'search', rows: [] });
       const rows = Object.values(db.players).filter(x => !x.guest && !x.banned && x.name.toLowerCase().includes(q)).slice(0, 12)
@@ -620,7 +957,8 @@ async function handle(ws, m) {
       return send(ws, { t: 'player', player: { id: t.id, name: t.name, guest: t.guest, avatar: t.avatar, title: t.title || null, ratings: t.ratings, created: t.created, seen: t.seen,
         status: status(t.id), gid: gameOf(t.id) ? activeOf.get(t.id) : null, puzzle: t.puzzle.r,
         friend: p.friends.includes(t.id) ? 'yes' : p.reqOut.includes(t.id) ? 'sent' : p.reqIn.includes(t.id) ? 'incoming' : 'no',
-        games: ids.map(id => summary(records.get(id), t.id)), hist: t.hist.slice(-300) } });
+        games: ids.map(id => summary(records.get(id), t.id)), hist: t.hist.slice(-300),
+        bio: t.bio || '', country: t.country || '', role: t.role || '', ach: t.ach || {}, streak: t.streak || 0, bestStreak: t.bestStreak || 0 } });
     }
     case 'history': {
       const tid = m.id || pid, all = byPlayer.get(tid) || [];
@@ -644,7 +982,7 @@ async function handle(ws, m) {
       else { p.puzzle.failed++; p.puzzle.streak = 0; }
       p.puzzle.recent.push(pz.id); if (p.puzzle.recent.length > 400) p.puzzle.recent.shift();
       p.hist.push([Date.now(), 'puzzle', p.puzzle.r]); if (p.hist.length > 1500) p.hist.shift();
-      save();
+      checkAch(p); save();
       send(ws, { t: 'puzzle_rating', r: p.puzzle.r, d: p.puzzle.r - before });
       return conns.get(pid).forEach(w => send(w, { t: 'me', me: me(p) }));
     }
@@ -745,7 +1083,7 @@ function runBackup() {
 }
 setInterval(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) { if (!db.backup.lastTry || Date.now() - db.backup.lastTry > 3600e3) runBackup(); } }, 10 * 60000);
 setTimeout(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) runBackup(); }, 30000);
-function overview() {
+function overview(isMod) {
   let playing = 0, spect = 0; games.forEach(g => { if (!g.over) { playing++; spect += g.spect.size; } });
   const all = Object.values(db.players), today = new Date(); today.setHours(0, 0, 0, 0);
   let gamesToday = 0; records.forEach(r => { if (r.end >= today.getTime()) gamesToday++; });
@@ -758,9 +1096,11 @@ function overview() {
       games: records.size, gamesToday, banned: all.filter(p => p.banned).length, reports: db.reports.filter(r => r.open).length },
     puzzles: puzzles.info(), live: liveList(), recent: [...records.values()].slice(-12).reverse().map(r => ({ id: r.id, end: r.end, tc: r.tc, result: r.result, reason: r.reason, w: r.w.name, b: r.b.name, n: r.moves.length })),
     reports: db.reports.filter(r => r.open).slice(-50).reverse(), announce: db.announce,
-    settings: db.settings, ipBans: Object.entries(db.ipBans).map(([ip, v]) => Object.assign({ ip }, v)),
+    settings: db.settings, ipBans: isMod ? [] : Object.entries(db.ipBans).map(([ip, v]) => Object.assign({ ip }, v)),
     audit: db.audit.slice(-80).reverse(), chat: chatLog.slice(-120).reverse(), activity: activity(),
-    titles: all.filter(p => p.title).length, updater: updaterInfo(), backup: Object.assign({ folder: backupDir() }, db.backup)
+    titles: all.filter(p => p.title).length, updater: updaterInfo(), backup: Object.assign({ folder: backupDir() }, db.backup),
+    upt: uptimeSummary(), staff: all.filter(p => p.role).map(p => ({ id: p.id, name: p.name, role: p.role, online: online(p.id) })),
+    filter: db.filter, dailyCount: Object.values(db.daily).filter(g => !g.over).length, dmCount: Object.keys(db.dms).length, achList: ACH
   };
 }
 function updaterInfo() {
@@ -783,7 +1123,10 @@ function adminPlayer(id) {
     created: p.created, seen: p.seen, online: online(p.id), playing: gameOf(p.id) ? activeOf.get(p.id) : null, banned: p.banned, banUntil: p.banUntil || null,
     banReason: p.banReason || null, muted: p.muted, lastIp: p.lastIp || null, ips: p.ips || [], sessions: Object.values(db.sessions).filter(s => s.pid === p.id).length,
     friends: p.friends.map(f => P(f) ? P(f).name : '?'), games: ids.map(gid => summary(records.get(gid), p.id)),
-    reports: db.reports.filter(r => r.who === p.id).length };
+    reports: db.reports.filter(r => r.who === p.id).length, puzzleStats: { r: p.puzzle.r, solved: p.puzzle.solved, failed: p.puzzle.failed, streak: p.puzzle.streak, best: p.puzzle.best },
+    bio: p.bio || '', country: p.country || '', role: p.role || '', ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, muteUntil: p.muteUntil || null,
+    strikes: p.strikes || 0, device: p.device || null, hist: p.hist.slice(-200), daily: dailyGamesOf(p.id).filter(g => !g.over).length,
+    linked: Object.values(db.players).filter(o => o.id !== p.id && p.lastIp && (o.ips || []).includes(p.lastIp)).slice(0, 12).map(o => ({ id: o.id, name: o.name, guest: o.guest })) };
 }
 function adminGames(q) {
   q = String(q || '').toLowerCase();
@@ -797,13 +1140,137 @@ function adminGames(q) {
   return out;
 }
 function rewriteGames() { const tmp = GAMESF + '.tmp'; fs.writeFileSync(tmp, [...records.values()].map(r => JSON.stringify(r)).join('\n') + (records.size ? '\n' : '')); fs.renameSync(tmp, GAMESF); }
-function adminPlayers(q) {
-  q = String(q || '').toLowerCase();
-  return Object.values(db.players).filter(p => !q || p.name.toLowerCase().includes(q) || p.id === q || (p.lastIp || '') === q)
-    .sort((a, b) => (b.seen || 0) - (a.seen || 0)).slice(0, 150)
+function adminPlayers(q, opt) {
+  q = String(q || '').toLowerCase(); opt = opt || {};
+  const kind = opt.kind || 'all', sort = opt.sort || 'seen';
+  let list = Object.values(db.players).filter(p => !q || p.name.toLowerCase().includes(q) || p.id === q || (p.lastIp || '') === q);
+  if (kind === 'accounts') list = list.filter(p => !p.guest); else if (kind === 'guests') list = list.filter(p => p.guest);
+  else if (kind === 'online') list = list.filter(p => online(p.id)); else if (kind === 'banned') list = list.filter(p => p.banned);
+  else if (kind === 'staff') list = list.filter(p => p.role); else if (kind === 'muted') list = list.filter(p => isMuted(p));
+  const total = (p) => CATS.reduce((s2, c) => s2 + p.ratings[c].games, 0);
+  const sorters = { seen: (a, b) => (b.seen || 0) - (a.seen || 0), created: (a, b) => b.created - a.created, name: (a, b) => a.name.localeCompare(b.name),
+    blitz: (a, b) => b.ratings.blitz.r - a.ratings.blitz.r, games: (a, b) => total(b) - total(a) };
+  list.sort(sorters[sort] || sorters.seen);
+  const count = list.length, off = Math.max(0, +opt.offset || 0), lim = Math.min(500, Math.max(1, +opt.limit || 100));
+  const rows = list.slice(off, off + lim)
     .map(p => ({ id: p.id, name: p.name, guest: p.guest, title: p.title || null, online: online(p.id), playing: !!gameOf(p.id), banned: p.banned, banUntil: p.banUntil || null, muted: p.muted, lastIp: p.lastIp || null,
       ratings: { bullet: p.ratings.bullet.r, blitz: p.ratings.blitz.r, rapid: p.ratings.rapid.r }, puzzle: p.puzzle.r,
-      games: CATS.reduce((s, c) => s + p.ratings[c].games, 0), created: p.created, seen: p.seen, friends: p.friends.length }));
+      games: CATS.reduce((s, c) => s + p.ratings[c].games, 0), created: p.created, seen: p.seen, friends: p.friends.length,
+      role: p.role || '', country: p.country || '', daily: p.ratings.daily.r, wins: CATS.reduce((s, c) => s + p.ratings[c].w, 0), ach: Object.keys(p.ach || {}).length }));
+  return { rows, count };
+}
+/* ----- full account editor ----- */
+function editPlayer(p, d) {
+  const num = (v, lo, hi) => { const n = Math.round(+v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : null; };
+  if (d.name != null && d.name !== p.name) {
+    const u = String(d.name).trim();
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) return 'Names use 3 to 20 letters, numbers or underscores';
+    const owner = db.names[u.toLowerCase()]; if (owner && owner !== p.id) return 'That name is taken';
+    if (p.username) delete db.names[p.username.toLowerCase()];
+    if (!p.guest) { p.username = u; db.names[u.toLowerCase()] = p.id; }
+    p.name = u;
+  }
+  if (d.title != null) p.title = cleanText(d.title, 16) || null;
+  if (d.bio != null) p.bio = String(d.bio).replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 300);
+  if (d.country != null) p.country = /^[A-Z]{2}$/.test(d.country) ? d.country : '';
+  if (d.avatar && 'kqrbnp'.includes(d.avatar.p) && d.avatar.p.length === 1 && d.avatar.c >= 0 && d.avatar.c < 8) p.avatar = { p: d.avatar.p, c: d.avatar.c | 0 };
+  if (d.created) { const t = Date.parse(d.created); if (t && t < Date.now() + 864e5) p.created = t; }
+  if (d.ratings) for (const c of CATS) {
+    const x = d.ratings[c]; if (!x) continue; const r = p.ratings[c], old = r.r;
+    ['r', 'peak'].forEach(k => { if (x[k] != null) { const v = num(x[k], 100, 3500); if (v != null) r[k] = v; } });
+    ['games', 'w', 'l', 'd'].forEach(k => { if (x[k] != null) { const v = num(x[k], 0, 1e6); if (v != null) r[k] = v; } });
+    if (x.w != null || x.l != null || x.d != null) r.games = Math.max(r.games, r.w + r.l + r.d);
+    r.peak = Math.max(r.peak, r.r);
+    if (r.r !== old) p.hist.push([Date.now(), c, r.r]);
+  }
+  if (d.puzzle) { const z = p.puzzle, x = d.puzzle;
+    ['solved', 'failed', 'streak', 'best'].forEach(k => { if (x[k] != null) { const v = num(x[k], 0, 1e6); if (v != null) z[k] = v; } });
+    if (x.r != null) { const v = num(x.r, 100, 3500); if (v != null && v !== z.r) { z.r = v; p.hist.push([Date.now(), 'puzzle', v]); } }
+    z.best = Math.max(z.best, z.streak); }
+  if (d.streak != null) { const v = num(d.streak, 0, 10000); if (v != null) p.streak = v; }
+  if (d.bestStreak != null) { const v = num(d.bestStreak, 0, 10000); if (v != null) p.bestStreak = v; }
+  p.bestStreak = Math.max(p.bestStreak || 0, p.streak || 0);
+  if (Array.isArray(d.ach)) { const keep = {}; d.ach.forEach(id => { if (ACH_IDS.has(id)) keep[id] = (p.ach && p.ach[id]) || Date.now(); }); p.ach = keep; }
+  return null;
+}
+function backupList() {
+  const dir = backupDir(); let files = [];
+  try { files = fs.readdirSync(dir).filter(f => /^rookery-backup-.*\.json$/.test(f)).map(f => { const st = fs.statSync(path.join(dir, f)); return { file: f, size: st.size, ts: st.mtimeMs }; }); } catch (e) {}
+  return { dir, files: files.sort((a, b) => b.ts - a.ts) };
+}
+function analytics() {
+  const now = Date.now(), heat = Array.from({ length: 7 }, () => Array(24).fill(0)), tcs = {}, reasons = {}, res = { w: 0, b: 0, d: 0 };
+  let plies = 0, n = 0;
+  records.forEach(r => {
+    if (now - r.end < 90 * 864e5) { const d = new Date(r.end); heat[d.getDay()][d.getHours()]++; }
+    tcs[r.tc] = (tcs[r.tc] || 0) + 1; reasons[r.reason] = (reasons[r.reason] || 0) + 1;
+    if (r.result === '1-0') res.w++; else if (r.result === '0-1') res.b++; else res.d++;
+    plies += r.moves.length; n++;
+  });
+  const acc = Object.values(db.players).filter(p => !p.guest);
+  const old = acc.filter(p => now - p.created > 2 * 864e5), back = old.filter(p => (p.seen || 0) - p.created > 864e5);
+  const recent = Object.values(db.players).filter(p => now - (p.seen || 0) < 30 * 864e5);
+  const dev = { phone: 0, computer: 0 }; recent.forEach(p => { if (p.device) dev[p.device]++; });
+  const days = []; for (let i = 29; i >= 0; i--) { const k = dayKey(now - i * 864e5); days.push({ day: k, active: db.stats.dau[k] || 0, peak: db.stats.peak[k] || 0 }); }
+  const total = p => CATS.reduce((s2, c) => s2 + p.ratings[c].games, 0);
+  const top = acc.slice().sort((a, b) => total(b) - total(a)).slice(0, 8).map(p => ({ id: p.id, name: p.name, games: total(p) }));
+  const pz = acc.reduce((a, p) => a + p.puzzle.solved, 0);
+  return { heat, tcs, reasons, res, avgMoves: n ? Math.round(plies / n / 2) : 0, retention: old.length ? Math.round(back.length / old.length * 100) : null, retentionBase: old.length,
+    devices: dev, days, top, puzzlesSolved: pz, achievements: acc.reduce((a, p) => a + Object.keys(p.ach || {}).length, 0) };
+}
+async function adminMore(route, req, res, b, ip, role, aud) {
+  const owner = role === 'owner';
+  if (route === 'analytics') return json(res, 200, analytics());
+  if (route === 'logs') return json(res, 200, { lines: logBuf.slice(-500) });
+  if (route === 'backups') return json(res, 200, backupList());
+  if (route === 'gameedit') {
+    const r = records.get(b.id); if (!r) return json(res, 404, { error: 'Game not found' });
+    if (!['1-0', '0-1', '1/2-1/2'].includes(b.result)) return json(res, 400, { error: 'Pick a result' });
+    r.result = b.result; r.reason = cleanText(b.reason, 40) || r.reason; r.edited = Date.now();
+    rewriteGames(); aud(ip, 'edit game', r.w.name + ' vs ' + r.b.name + ' ' + r.result);
+    return json(res, 200, { ok: true });
+  }
+  if (route === 'filter') {
+    if (Array.isArray(b.words)) db.filter.words = [...new Set(b.words.map(w => String(w).trim().slice(0, 40)).filter(Boolean))].slice(0, 500);
+    if (b.enabled != null) db.filter.enabled = !!b.enabled;
+    if (b.strikes != null) db.filter.strikes = Math.max(0, Math.min(50, +b.strikes | 0));
+    if (b.muteHours != null) db.filter.muteHours = Math.max(1, Math.min(24 * 90, +b.muteHours | 0));
+    save(); aud(ip, 'word filter', db.filter.words.length + ' words, ' + (db.filter.enabled ? 'on' : 'off'));
+    return json(res, 200, { ok: true });
+  }
+  if (route === 'broadcast') {
+    const text = cleanText(b.text, 300); if (!text) return json(res, 400, { error: 'Write a message first' });
+    const m = JSON.stringify({ t: 'admin_msg', text }); let n = 0; conns.forEach(st => { n++; st.forEach(ws => send(ws, m)); });
+    aud(ip, 'message everyone', text); return json(res, 200, { ok: true, n });
+  }
+  if (route === 'createaccount') {
+    const u = String(b.username || '').trim(), pw = String(b.password || '');
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) return json(res, 400, { error: 'Usernames use 3 to 20 letters, numbers or underscores' });
+    if (db.names[u.toLowerCase()]) return json(res, 400, { error: 'That username is taken' });
+    if (pw.length < 6) return json(res, 400, { error: 'Passwords need at least 6 characters' });
+    const p = newPlayer(rid(5), u); p.guest = false; p.username = u; const salt = rid(16); p.pass = { salt, hash: await hashPw(pw, salt) };
+    db.players[p.id] = p; db.names[u.toLowerCase()] = p.id; save(); aud(ip, 'create account', u);
+    return json(res, 200, { ok: true, id: p.id });
+  }
+  if (route === 'cleanguests') {
+    let n = 0; const cut = Date.now() - (+b.days || 7) * 864e5;
+    for (const p of Object.values(db.players)) if (p.guest && !online(p.id) && (p.seen || 0) < cut && CATS.every(c => !p.ratings[c].games)) { delete db.players[p.id]; n++; }
+    for (const [t, x] of Object.entries(db.sessions)) if (!db.players[x.pid]) delete db.sessions[t];
+    save(); aud(ip, 'remove guests', n + ' removed'); return json(res, 200, { ok: true, n });
+  }
+  if (route === 'restore') {
+    if (!owner) return json(res, 403, { error: 'Only the owner can restore a backup' });
+    const name = String(b.file || ''); if (!/^rookery-backup-[\w-]+\.json$/.test(name)) return json(res, 400, { error: 'Pick a backup from the list' });
+    let data; try { data = JSON.parse(fs.readFileSync(path.join(backupDir(), name), 'utf8')); } catch (e) { return json(res, 400, { error: 'That backup cannot be read: ' + e.message }); }
+    if (!data || !data.db || !data.db.players) return json(res, 400, { error: 'That file is not a Rookery backup' });
+    runBackup();
+    db = data.db; records.clear(); byPlayer.clear(); (data.games || []).forEach(indexRecord); rewriteGames();
+    try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {}
+    log('[backup] restored ' + name); audit(ip, 'restore backup', name);
+    json(res, 200, { ok: true });
+    beat({ clean: true }); return setTimeout(() => process.exit(0), 500);
+  }
+  return json(res, 404, { error: 'Unknown' });
 }
 function kick(pid, msg) { const s = conns.get(pid); if (!s) return; [...s].forEach(ws => { send(ws, { t: 'banned', msg }); try { ws.close(); } catch (e) {} }); }
 async function adminApi(req, res, route) {
@@ -812,29 +1279,58 @@ async function adminApi(req, res, route) {
     await ensureAdmin();
     if (limited('admin:' + ip)) return json(res, 429, { error: 'Too many attempts. Try again in 10 minutes.' });
     const b = await body(req);
+    if (b.username) {
+      const tid = db.names[String(b.username).trim().toLowerCase()], t = tid && P(tid);
+      if (!t || !['mod', 'admin'].includes(t.role) || !(await checkPw(String(b.password || ''), t.pass)) || banInfo(t)) { audit(ip, 'failed sign in', String(b.username).slice(0, 30)); return json(res, 401, { error: 'Wrong username or password, or this account is not a moderator' }); }
+      const tok = rid(24); adminTokens.set(tok, { exp: Date.now() + 12 * 3600e3, role: t.role, pid: t.id, name: t.name });
+      log('[admin] ' + t.name + ' signed in as ' + t.role); audit(ip, 'sign in', t.name + ' (' + t.role + ')');
+      return json(res, 200, { token: tok, role: t.role, name: t.name });
+    }
     if (!(await checkPw(String(b.password || ''), admin))) { audit(ip, 'failed sign in', ''); return json(res, 401, { error: 'Wrong password' }); }
-    const tok = rid(24); adminTokens.set(tok, Date.now() + 12 * 3600e3);
-    log('[admin] signed in from ' + ip); audit(ip, 'sign in', '');
-    return json(res, 200, { token: tok });
+    const tok = rid(24); adminTokens.set(tok, { exp: Date.now() + 12 * 3600e3, role: 'owner', pid: null, name: 'Owner' });
+    log('[admin] signed in from ' + ip); audit(ip, 'sign in', 'Owner');
+    return json(res, 200, { token: tok, role: 'owner', name: 'Owner' });
   }
   const tok = String(req.headers.authorization || '').replace(/^Bearer /, '');
-  const exp = adminTokens.get(tok);
-  if (!exp || exp < Date.now()) { adminTokens.delete(tok); return json(res, 401, { error: 'Sign in again' }); }
-  if (route === 'overview') return json(res, 200, overview());
+  const sess = adminTokens.get(tok);
+  if (!sess || sess.exp < Date.now()) { adminTokens.delete(tok); return json(res, 401, { error: 'Sign in again' }); }
+  if (sess.pid) { const sp = P(sess.pid); if (!sp || !['mod', 'admin'].includes(sp.role) || sp.banned) { adminTokens.delete(tok); return json(res, 401, { error: 'Sign in again' }); } sess.role = sp.role; }
+  const role = sess.role, isMod = role === 'mod';
+  const who = sess.name;
+  const aud = (i, a, d) => audit(i, a, (d ? d + ' ' : '') + '(' + who + ')');
+  const MOD_GET = new Set(['overview', 'players', 'player', 'games', 'logs-none']);
+  const MOD_POST = new Set(['player', 'report', 'endgame']);
+  const MOD_ACTIONS = new Set(['mute', 'unmute', 'kick', 'ban', 'unban', 'message']);
+  if (isMod && !(req.method === 'GET' ? MOD_GET : MOD_POST).has(route)) return json(res, 403, { error: 'Moderators cannot do that' });
+  if (route === 'overview') return json(res, 200, Object.assign(overview(isMod), { me: { role, name: who } }));
   const qs = new URL(req.url, 'http://x').searchParams;
-  if (route === 'players') return json(res, 200, { rows: adminPlayers(qs.get('q')) });
+  if (route === 'players') return json(res, 200, adminPlayers(qs.get('q'), { kind: qs.get('kind'), sort: qs.get('sort'), offset: qs.get('offset'), limit: qs.get('limit') }));
   if (route === 'player' && req.method === 'GET') { const d = adminPlayer(qs.get('id')); return d ? json(res, 200, d) : json(res, 404, { error: 'Player not found' }); }
   if (route === 'games') return json(res, 200, { rows: adminGames(qs.get('q')) });
   if (route === 'backup') {
-    audit(ip, 'backup', '');
+    aud(ip, 'backup', '');
     const bodyStr = JSON.stringify({ exported: new Date().toISOString(), version: VERSION, db, games: [...records.values()] });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Disposition': 'attachment; filename="rookery-backup-' + new Date().toISOString().slice(0, 10) + '.json"', 'Cache-Control': 'no-store' });
     return res.end(bodyStr);
   }
+  if (route === 'players.csv') {
+    const rows = adminPlayers('', { limit: 500, sort: 'name' }).rows;
+    const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const csv = ['name,account,role,title,bullet,blitz,rapid,daily,puzzle,games,wins,joined,last seen'].concat(rows.map(r => [r.name, r.guest ? 'guest' : 'account', r.role, r.title, r.ratings.bullet, r.ratings.blitz, r.ratings.rapid, r.daily, r.puzzle, r.games, r.wins, new Date(r.created).toISOString().slice(0, 10), new Date(r.seen || r.created).toISOString().slice(0, 10)].map(esc).join(','))).join('\r\n');
+    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="rookery-players.csv"', 'Cache-Control': 'no-store' });
+    return res.end('\ufeff' + csv);
+  }
+  if (['analytics', 'logs', 'backups'].includes(route) && req.method === 'GET') return adminMore(route, req, res, {}, ip, role, aud);
   if (req.method !== 'POST') return json(res, 404, { error: 'Unknown' });
   const b = await body(req);
+  const OWNER_ONLY = new Set(['password', 'restart', 'restore', 'settings', 'ipban', 'backupdir']);
+  if (role !== 'owner' && OWNER_ONLY.has(route)) return json(res, 403, { error: 'Only the owner can do that' });
   if (route === 'player') {
     const p = P(b.id); if (!p) return json(res, 404, { error: 'Player not found' });
+    if (isMod && !MOD_ACTIONS.has(b.action)) return json(res, 403, { error: 'Moderators cannot do that' });
+    if (isMod && b.action === 'ban' && (!(+b.minutes > 0) || +b.minutes > 10080)) return json(res, 403, { error: 'Moderators can suspend for up to 7 days' });
+    if (isMod && ['mod', 'admin'].includes(p.role)) return json(res, 403, { error: 'Moderators cannot act on staff accounts' });
+    if (role === 'admin' && p.role === 'admin' && sess.pid !== p.id && ['ban', 'delete', 'edit', 'role', 'password'].includes(b.action)) return json(res, 403, { error: 'Only the owner can change another admin' });
     switch (b.action) {
       case 'ban': {
         const mins = +b.minutes || 0;
@@ -866,7 +1362,7 @@ async function adminApi(req, res, route) {
         const temp = rid(4); const salt = rid(16); p.pass = { salt, hash: await hashPw(temp, salt) };
         for (const [t, s] of Object.entries(db.sessions)) if (s.pid === p.id) delete db.sessions[t];
         kick(p.id, 'Your password was reset. Sign in with the new password.');
-        audit(ip, 'password', p.name); save();
+        aud(ip, 'password', p.name); save();
         return json(res, 200, { ok: true, temp });
       }
       case 'title': p.title = cleanText(b.title, 16) || null; sendP(p.id, { t: 'me', me: me(p) }); notifyFriends(p.id); break;
@@ -876,8 +1372,26 @@ async function adminApi(req, res, route) {
         sendP(p.id, { t: 'admin_msg', text }); break;
       }
       case 'logout': for (const [t, s] of Object.entries(db.sessions)) if (s.pid === p.id) delete db.sessions[t]; kick(p.id, 'You were signed out by the server.'); break;
-      case 'mute': p.muted = true; break;
-      case 'unmute': p.muted = false; break;
+      case 'mute': p.muted = true; p.muteUntil = +b.hours > 0 ? Date.now() + b.hours * 3600e3 : null; break;
+      case 'unmute': p.muted = false; p.muteUntil = null; p.strikes = 0; break;
+      case 'edit': { const r = editPlayer(p, b.data || {}); if (r) return json(res, 400, { error: r }); sendP(p.id, { t: 'me', me: me(p) }); notifyFriends(p.id); break; }
+      case 'role': {
+        if (role !== 'owner') return json(res, 403, { error: 'Only the owner can change roles' });
+        if (p.guest) return json(res, 400, { error: 'Guests cannot be staff. They need an account first.' });
+        p.role = ['mod', 'admin'].includes(b.role) ? b.role : '';
+        for (const [k, v] of adminTokens) if (v.pid === p.id) adminTokens.delete(k);
+        sendP(p.id, { t: 'me', me: me(p) }); break;
+      }
+      case 'max': {
+        const v = Math.max(100, Math.min(3500, Math.round(+b.value || 3000)));
+        for (const c of CATS) { const r = p.ratings[c]; r.r = v; r.peak = Math.max(r.peak, v); p.hist.push([Date.now(), c, v]); }
+        p.puzzle.r = Math.max(p.puzzle.r, v);
+        ACH.forEach(a => grant(p, a[0], true));
+        if (b.title) p.title = cleanText(b.title, 16);
+        sendP(p.id, { t: 'me', me: me(p) }); notifyFriends(p.id); break;
+      }
+      case 'grantall': ACH.forEach(a => grant(p, a[0], true)); sendP(p.id, { t: 'me', me: me(p) }); break;
+      case 'clearhist': p.hist = []; sendP(p.id, { t: 'me', me: me(p) }); break;
       case 'kick': kick(p.id, 'You were disconnected by the server.'); break;
       case 'reset': p.ratings = newRatings(1200); p.hist = []; break;
       case 'delete': {
@@ -889,13 +1403,13 @@ async function adminApi(req, res, route) {
       }
       default: return json(res, 400, { error: 'Unknown action' });
     }
-    log('[admin] ' + b.action + ' ' + p.name); audit(ip, b.action, p.name + (b.reason ? ' (' + b.reason + ')' : '') + (b.value ? ' ' + b.cat + '=' + b.value : '') + (b.title ? ' ' + b.title : '')); save();
+    log('[admin] ' + b.action + ' ' + p.name); aud(ip, b.action, p.name + (b.reason ? ' (' + b.reason + ')' : '') + (b.value ? ' ' + (b.cat ? b.cat + '=' : 'all ratings ') + b.value : '') + (b.hours ? ' ' + b.hours + 'h' : '') + (b.role != null && b.action === 'role' ? ' ' + (b.role || 'player') : '') + (b.title ? ' ' + b.title : '')); save();
     return json(res, 200, { ok: true });
   }
   if (route === 'report') { const r = db.reports.find(x => x.id === b.id); if (r) { r.open = false; save(); } return json(res, 200, { ok: true }); }
   if (route === 'announce') {
     const text = cleanText(b.text, 200);
-    db.announce = text ? { text, ts: Date.now() } : null; save(); audit(ip, 'announcement', text || '(removed)');
+    db.announce = text ? { text, ts: Date.now() } : null; save(); aud(ip, 'announcement', text || '(removed)');
     const m = JSON.stringify(text ? { t: 'announce', text, ts: Date.now() } : { t: 'announce', text: '' });
     conns.forEach(s => s.forEach(ws => send(ws, m)));
     return json(res, 200, { ok: true });
@@ -905,14 +1419,14 @@ async function adminApi(req, res, route) {
     if (g && !g.over) {
       const r = ['1-0', '0-1', '1/2-1/2'].includes(b.result) ? b.result : 'aborted';
       endGame(g, r, r === 'aborted' ? 'aborted' : 'server decision');
-      audit(ip, 'end game', P(g.w).name + ' vs ' + P(g.b).name + ' ' + r);
+      aud(ip, 'end game', P(g.w).name + ' vs ' + P(g.b).name + ' ' + r);
     }
     return json(res, 200, { ok: true });
   }
-  if (route === 'deletegame') { if (records.delete(b.id)) { byPlayer.forEach(l => { const i = l.indexOf(b.id); if (i >= 0) l.splice(i, 1); }); rewriteGames(); audit(ip, 'delete game', b.id); } return json(res, 200, { ok: true }); }
+  if (route === 'deletegame') { if (records.delete(b.id)) { byPlayer.forEach(l => { const i = l.indexOf(b.id); if (i >= 0) l.splice(i, 1); }); rewriteGames(); aud(ip, 'delete game', b.id); } return json(res, 200, { ok: true }); }
   if (route === 'settings') {
     if (!(b.key in DEFAULT_SETTINGS)) return json(res, 400, { error: 'Unknown setting' });
-    db.settings[b.key] = !!b.value; save(); audit(ip, 'setting', b.key + '=' + !!b.value);
+    db.settings[b.key] = !!b.value; save(); aud(ip, 'setting', b.key + '=' + !!b.value);
     const m = JSON.stringify({ t: 'cfg', cfg: publicCfg() }); conns.forEach(st => st.forEach(ws => send(ws, m)));
     if (b.key === 'maintenance' && b.value) for (const k in queues) queues[k] = [];
     return json(res, 200, { ok: true });
@@ -924,23 +1438,23 @@ async function adminApi(req, res, route) {
       db.ipBans[tip] = { ts: Date.now(), reason: cleanText(b.reason, 120) || null };
       wss.clients.forEach(w => { if (w.ip === tip) { send(w, { t: 'banned', msg: 'Access from your network has been blocked.' }); try { w.close(); } catch (e) {} } });
     }
-    audit(ip, b.remove ? 'unblock address' : 'block address', tip); save();
+    aud(ip, b.remove ? 'unblock address' : 'block address', tip); save();
     return json(res, 200, { ok: true });
   }
-  if (route === 'backupnow') { runBackup(); audit(ip, 'backup', 'automatic copy now'); return db.backup.error ? json(res, 500, { error: db.backup.error }) : json(res, 200, { ok: true, file: db.backup.lastFile }); }
+  if (route === 'backupnow') { runBackup(); aud(ip, 'backup', 'automatic copy now'); return db.backup.error ? json(res, 500, { error: db.backup.error }) : json(res, 200, { ok: true, file: db.backup.lastFile }); }
   if (route === 'backupdir') {
     const dir = String(b.dir || '').trim();
     if (dir && !path.isAbsolute(dir)) return json(res, 400, { error: 'Use a full folder path, like E:\\Rookery-backups' });
     try { if (dir) fs.mkdirSync(dir, { recursive: true }); } catch (e) { return json(res, 400, { error: 'That folder cannot be created: ' + e.message }); }
-    db.backup.dir = dir || null; save(); audit(ip, 'backup folder', dir || 'automatic');
+    db.backup.dir = dir || null; save(); aud(ip, 'backup folder', dir || 'automatic');
     return json(res, 200, { ok: true });
   }
-  if (route === 'checkupdate') { fs.writeFileSync(path.join(DATA, 'update-now'), '1'); audit(ip, 'check for update', ''); return json(res, 200, { ok: true }); }
+  if (route === 'checkupdate') { fs.writeFileSync(path.join(DATA, 'update-now'), '1'); aud(ip, 'check for update', ''); return json(res, 200, { ok: true }); }
   if (route === 'restart') {
-    audit(ip, 'restart', ''); log('[admin] restart requested');
+    aud(ip, 'restart', ''); log('[admin] restart requested');
     json(res, 200, { ok: true });
     try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {}
-    setTimeout(() => process.exit(0), 600); return;
+    beat({ clean: true }); setTimeout(() => process.exit(0), 600); return;
   }
   if (route === 'puzzles') { puzzles.download(); return json(res, 200, { ok: true, status: puzzles.info() }); }
   if (route === 'password') {
@@ -949,10 +1463,11 @@ async function adminApi(req, res, route) {
     const salt = rid(16); admin = { salt, hash: await hashPw(pw, salt) };
     fs.writeFileSync(ADMINF, JSON.stringify(admin));
     try { fs.unlinkSync(path.join(DATA, 'ADMIN-PASSWORD.txt')); } catch (e) {}
-    adminTokens.clear(); const t2 = rid(24); adminTokens.set(t2, Date.now() + 12 * 3600e3);
+    for (const [k, v] of adminTokens) if (v.role === 'owner') adminTokens.delete(k);
+    const t2 = rid(24); adminTokens.set(t2, { exp: Date.now() + 12 * 3600e3, role: 'owner', pid: null, name: 'Owner' });
     return json(res, 200, { ok: true, token: t2 });
   }
-  return json(res, 404, { error: 'Unknown' });
+  return await adminMore(route, req, res, b, ip, role, aud);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -962,7 +1477,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/internal/restart' && req.method === 'POST') {
       const k = Buffer.from(String(req.headers['x-rookery-key'] || '')), want = Buffer.from(INTERNAL_KEY);
       if (k.length !== want.length || !crypto.timingSafeEqual(k, want)) { res.writeHead(403); return res.end(); }
-      log('[update] restarting after an update'); res.writeHead(200); res.end('ok');
+      log('[update] restarting after an update'); res.writeHead(200); res.end('ok'); beat({ clean: true });
       try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {}
       return setTimeout(() => process.exit(0), 400);
     }
@@ -987,6 +1502,7 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 wss.on('connection', (ws, req) => {
   ws.alive = true; ws.ip = ipOf(req); ws.bucket = 40; ws.bt = Date.now();
+  ws.device = /mobile|android|iphone|ipad/i.test(req.headers['user-agent'] || '') ? 'phone' : 'computer';
   ws.on('pong', () => { ws.alive = true; });
   ws.on('message', raw => {
     const now = Date.now(); ws.bucket = Math.min(40, ws.bucket + (now - ws.bt) / 50); ws.bt = now;
@@ -1000,7 +1516,7 @@ wss.on('connection', (ws, req) => {
 });
 setInterval(() => {
   wss.clients.forEach(ws => { if (!ws.alive) return ws.terminate(); ws.alive = false; try { ws.ping(); } catch (e) {} });
-  const now = Date.now(); for (const [t, e] of adminTokens) if (e < now) adminTokens.delete(t);
+  const now = Date.now(); for (const [t, e] of adminTokens) if (e.exp < now) adminTokens.delete(t);
 }, 25000);
 
 server.listen(PORT, async () => {
@@ -1009,5 +1525,6 @@ server.listen(PORT, async () => {
   log(`[puzzles] ${puzzles.info().count} puzzles loaded (${puzzles.info().source})`);
   if (puzzles.info().source === 'builtin' && process.env.NO_PUZZLE_DOWNLOAD !== '1') setTimeout(() => puzzles.download(), 3000);
 });
-function shutdown() { log('shutting down'); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {} process.exit(0); }
+function shutdown() { log('shutting down'); beat({ clean: true }); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {} process.exit(0); }
+process.on('uncaughtException', e => { log('[crash] ' + (e.stack || e.message)); beat({ crash: String(e.message || e) }); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (er) {} process.exit(1); });
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
