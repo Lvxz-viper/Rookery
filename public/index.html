@@ -1390,7 +1390,7 @@ function ttl(t){return t?'<span class="ttl">'+esc(t)+'</span>':'';}
 function session(kind,fen){var p=new Pos(fen||START);return {kind:kind,pos:p,startFen:p.fen(),moves:[],fens:[p.fen()],view:0,orient:0,over:null};}
 var SS={play:session('play'),analysis:session('analysis'),puzzles:null,review:null,watch:null};
 SS.play.setup=true;SS.analysis.engineOn=true;SS.analysis.lines=3;
-var route='home';
+var route='home',navSeq=0;
 var ROUTES=['home','play','puzzles','analysis','watch','community','profile','prefs','review'];
 var BOARD_ROUTES={play:1,puzzles:1,analysis:1,review:1};
 function isBoardRoute(){return BOARD_ROUTES[route]||(route==='watch'&&SS.watch&&!SS.watch.left);}
@@ -1543,7 +1543,7 @@ function go(r,opt){
   if(ROUTES.indexOf(r)<0)r='home';
   if(r==='review'&&!SS.review)r='play';
   if(r==='puzzles'&&!SS.puzzles)nextPuzzle(true);
-  var prev=route;route=r;
+  var prev=route;route=r;navSeq++;
   if(location.hash!=='#'+r){try{history.replaceState(null,'',location.pathname+location.search+'#'+r);}catch(e){location.hash=r;}}
   if(prev==='analysis'&&r!=='analysis')eng.ana.cancel();
   if(prev==='watch'&&r!=='watch'&&SS.watch&&!SS.watch.left){netSend({t:'unwatch'});SS.watch.left=true;}
@@ -2039,7 +2039,18 @@ var dailyPz=null,profCat=store.get('profcat','blitz'),commTab='leaderboard';
 function renderPage(){
   var h='';
   if(route==='home')h=homePage();else if(route==='watch')h=watchPage();else if(route==='community')h=communityPage();else if(route==='profile')h=profilePage();else if(route==='prefs')h=prefsPage();
-  pageEl.innerHTML='<div class="wrap enter">'+h+'</div>';}
+  setPage(h);}
+/* Re-render a page without replaying the entry animation, losing scroll, or dropping what is typed in a field. */
+var lastPage={seq:-1,html:null};
+function setPage(html){var same=lastPage.seq===navSeq;
+  if(same&&lastPage.html===html)return;
+  var ae=document.activeElement,aid=ae&&ae.id&&pageEl.contains(ae)?ae.id:null,av=aid&&'value' in ae?ae.value:null,sel=null;
+  try{if(aid)sel=[ae.selectionStart,ae.selectionEnd];}catch(e){}
+  var st=pageEl.scrollTop,wy=window.scrollY;
+  pageEl.innerHTML='<div class="wrap'+(same?'':' enter')+'">'+html+'</div>';
+  lastPage={seq:navSeq,html:html};
+  if(same){pageEl.scrollTop=st;if(window.scrollY!==wy)window.scrollTo(0,wy);}
+  if(aid){var n=document.getElementById(aid);if(n){if(av!=null)n.value=av;try{n.focus({preventScroll:true});if(sel&&sel[0]!=null)n.setSelectionRange(sel[0],sel[1]);}catch(e){}}}}
 function activeBanner(){var S=SS.play;
   if(S&&!S.setup&&S.active&&!S.over)return '<div class="banner">'+avatar(S.online?S.opp.avatar:S.local?{p:'k',c:6}:S.bot.av,'sm')+'<span>Your game '+(S.local?'on this device':'against <b>'+esc(S.online?S.opp.name:S.bot.name)+'</b>')+' is in progress.</span><a class="btn brass" href="#play">Return to game</a></div>';
   if(NET.cfg&&NET.cfg.maintenance)return '<div class="banner">'+I.warn.replace('<svg','<svg width="20" height="20"')+'<span><b>Maintenance.</b> New online games are paused for a short while. Bots, puzzles and analysis still work.</span></div>';
@@ -2356,7 +2367,7 @@ var _go=go;go=function(r,opt){
     if(route==='play'&&setup.tab==='daily'&&SS.play.setup)netSend({t:'daily_list'});}};
 
 var _renderPage=renderPage;renderPage=function(){
-  if(route==='inbox'){pageEl.innerHTML='<div class="wrap enter">'+inboxPage()+'</div>';var l=$('#dmMsgs');if(l)l.scrollTop=l.scrollHeight;return;}
+  if(route==='inbox'){var ms=$('#dmMsgs'),keep=ms&&ms.scrollHeight-ms.scrollTop-ms.clientHeight>60?ms.scrollTop:null;setPage(inboxPage());var l=$('#dmMsgs');if(l)l.scrollTop=keep!=null?keep:l.scrollHeight;return;}
   _renderPage();};
 var _renderPanel=renderPanel;renderPanel=function(){
   var S=cur();
@@ -2807,8 +2818,9 @@ var LEGAL_ROUTES=['terms','privacy','rules','licenses','contact'];
 LEGAL_ROUTES.forEach(function(r){ROUTES.push(r);});
 var LEGAL_TITLES={terms:'Terms of Service',privacy:'Privacy Policy',rules:'Community Rules',licenses:'Licenses and Credits',contact:'Contact'};
 var _renderPage6=renderPage;renderPage=function(){
-  if(LEGAL_ROUTES.indexOf(route)>=0){pageEl.innerHTML='<div class="wrap enter">'+legalPage(route)+footerHTML()+'</div>';return;}
-  _renderPage6();var w=pageEl.querySelector('.wrap');if(w&&!w.querySelector('.sitefoot'))w.insertAdjacentHTML('beforeend',footerHTML());};
+  if(LEGAL_ROUTES.indexOf(route)>=0){setPage(legalPage(route));return;}
+  _renderPage6();};
+var _setPage6=setPage;setPage=function(h){_setPage6(h+footerHTML());};
 function footerHTML(){return '<footer class="sitefoot"><nav>'+LEGAL_ROUTES.map(function(r){return '<a href="#'+r+'">'+(r==='licenses'?'Licenses':r==='rules'?'Community rules':LEGAL_TITLES[r].replace(' of Service','').replace(' Policy',''))+'</a>';}).join('')+'</nav><small>© '+new Date().getFullYear()+' Rookery</small></footer>';}
 function contactLine(){var e=NET.cfg&&NET.cfg.contact;return e?'by email at <a href="mailto:'+esc(e)+'">'+esc(e)+'</a> or through the <a href="#contact">contact form</a>':'through the <a href="#contact">contact form</a>';}
 function legalNav(cur){return '<nav class="legalnav">'+LEGAL_ROUTES.map(function(r){return '<a href="#'+r+'" class="'+(r===cur?'on':'')+'">'+LEGAL_TITLES[r]+'</a>';}).join('')+'</nav>';}

@@ -18,7 +18,7 @@ function ttl(t){return t?'<span class="ttl">'+esc(t)+'</span>':'';}
 function session(kind,fen){var p=new Pos(fen||START);return {kind:kind,pos:p,startFen:p.fen(),moves:[],fens:[p.fen()],view:0,orient:0,over:null};}
 var SS={play:session('play'),analysis:session('analysis'),puzzles:null,review:null,watch:null};
 SS.play.setup=true;SS.analysis.engineOn=true;SS.analysis.lines=3;
-var route='home';
+var route='home',navSeq=0;
 var ROUTES=['home','play','puzzles','analysis','watch','community','profile','prefs','review'];
 var BOARD_ROUTES={play:1,puzzles:1,analysis:1,review:1};
 function isBoardRoute(){return BOARD_ROUTES[route]||(route==='watch'&&SS.watch&&!SS.watch.left);}
@@ -171,7 +171,7 @@ function go(r,opt){
   if(ROUTES.indexOf(r)<0)r='home';
   if(r==='review'&&!SS.review)r='play';
   if(r==='puzzles'&&!SS.puzzles)nextPuzzle(true);
-  var prev=route;route=r;
+  var prev=route;route=r;navSeq++;
   if(location.hash!=='#'+r){try{history.replaceState(null,'',location.pathname+location.search+'#'+r);}catch(e){location.hash=r;}}
   if(prev==='analysis'&&r!=='analysis')eng.ana.cancel();
   if(prev==='watch'&&r!=='watch'&&SS.watch&&!SS.watch.left){netSend({t:'unwatch'});SS.watch.left=true;}

@@ -3,7 +3,18 @@ var dailyPz=null,profCat=store.get('profcat','blitz'),commTab='leaderboard';
 function renderPage(){
   var h='';
   if(route==='home')h=homePage();else if(route==='watch')h=watchPage();else if(route==='community')h=communityPage();else if(route==='profile')h=profilePage();else if(route==='prefs')h=prefsPage();
-  pageEl.innerHTML='<div class="wrap enter">'+h+'</div>';}
+  setPage(h);}
+/* Re-render a page without replaying the entry animation, losing scroll, or dropping what is typed in a field. */
+var lastPage={seq:-1,html:null};
+function setPage(html){var same=lastPage.seq===navSeq;
+  if(same&&lastPage.html===html)return;
+  var ae=document.activeElement,aid=ae&&ae.id&&pageEl.contains(ae)?ae.id:null,av=aid&&'value' in ae?ae.value:null,sel=null;
+  try{if(aid)sel=[ae.selectionStart,ae.selectionEnd];}catch(e){}
+  var st=pageEl.scrollTop,wy=window.scrollY;
+  pageEl.innerHTML='<div class="wrap'+(same?'':' enter')+'">'+html+'</div>';
+  lastPage={seq:navSeq,html:html};
+  if(same){pageEl.scrollTop=st;if(window.scrollY!==wy)window.scrollTo(0,wy);}
+  if(aid){var n=document.getElementById(aid);if(n){if(av!=null)n.value=av;try{n.focus({preventScroll:true});if(sel&&sel[0]!=null)n.setSelectionRange(sel[0],sel[1]);}catch(e){}}}}
 function activeBanner(){var S=SS.play;
   if(S&&!S.setup&&S.active&&!S.over)return '<div class="banner">'+avatar(S.online?S.opp.avatar:S.local?{p:'k',c:6}:S.bot.av,'sm')+'<span>Your game '+(S.local?'on this device':'against <b>'+esc(S.online?S.opp.name:S.bot.name)+'</b>')+' is in progress.</span><a class="btn brass" href="#play">Return to game</a></div>';
   if(NET.cfg&&NET.cfg.maintenance)return '<div class="banner">'+I.warn.replace('<svg','<svg width="20" height="20"')+'<span><b>Maintenance.</b> New online games are paused for a short while. Bots, puzzles and analysis still work.</span></div>';

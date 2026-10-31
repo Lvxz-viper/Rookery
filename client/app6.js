@@ -22,8 +22,9 @@ var LEGAL_ROUTES=['terms','privacy','rules','licenses','contact'];
 LEGAL_ROUTES.forEach(function(r){ROUTES.push(r);});
 var LEGAL_TITLES={terms:'Terms of Service',privacy:'Privacy Policy',rules:'Community Rules',licenses:'Licenses and Credits',contact:'Contact'};
 var _renderPage6=renderPage;renderPage=function(){
-  if(LEGAL_ROUTES.indexOf(route)>=0){pageEl.innerHTML='<div class="wrap enter">'+legalPage(route)+footerHTML()+'</div>';return;}
-  _renderPage6();var w=pageEl.querySelector('.wrap');if(w&&!w.querySelector('.sitefoot'))w.insertAdjacentHTML('beforeend',footerHTML());};
+  if(LEGAL_ROUTES.indexOf(route)>=0){setPage(legalPage(route));return;}
+  _renderPage6();};
+var _setPage6=setPage;setPage=function(h){_setPage6(h+footerHTML());};
 function footerHTML(){return '<footer class="sitefoot"><nav>'+LEGAL_ROUTES.map(function(r){return '<a href="#'+r+'">'+(r==='licenses'?'Licenses':r==='rules'?'Community rules':LEGAL_TITLES[r].replace(' of Service','').replace(' Policy',''))+'</a>';}).join('')+'</nav><small>© '+new Date().getFullYear()+' Rookery</small></footer>';}
 function contactLine(){var e=NET.cfg&&NET.cfg.contact;return e?'by email at <a href="mailto:'+esc(e)+'">'+esc(e)+'</a> or through the <a href="#contact">contact form</a>':'through the <a href="#contact">contact form</a>';}
 function legalNav(cur){return '<nav class="legalnav">'+LEGAL_ROUTES.map(function(r){return '<a href="#'+r+'" class="'+(r===cur?'on':'')+'">'+LEGAL_TITLES[r]+'</a>';}).join('')+'</nav>';}

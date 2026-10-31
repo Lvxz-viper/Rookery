@@ -53,7 +53,7 @@ var _go=go;go=function(r,opt){
     if(route==='play'&&setup.tab==='daily'&&SS.play.setup)netSend({t:'daily_list'});}};
 
 var _renderPage=renderPage;renderPage=function(){
-  if(route==='inbox'){pageEl.innerHTML='<div class="wrap enter">'+inboxPage()+'</div>';var l=$('#dmMsgs');if(l)l.scrollTop=l.scrollHeight;return;}
+  if(route==='inbox'){var ms=$('#dmMsgs'),keep=ms&&ms.scrollHeight-ms.scrollTop-ms.clientHeight>60?ms.scrollTop:null;setPage(inboxPage());var l=$('#dmMsgs');if(l)l.scrollTop=keep!=null?keep:l.scrollHeight;return;}
   _renderPage();};
 var _renderPanel=renderPanel;renderPanel=function(){
   var S=cur();
