@@ -28,7 +28,7 @@ function startPuzzle(pz,daily){
 function reportPuzzle(S,win){
   if(S.reported)return;S.reported=true;
   pzRecent.push(S.pz.id);if(pzRecent.length>300)pzRecent=pzRecent.slice(-300);store.set('pzrecent',pzRecent);
-  if(ONLINE&&NET.ok){S.pending=true;netSend({t:'puzzle_result',id:S.pz.id,win:win});return;}
+  if(ONLINE&&NET.ok){S.pending=true;netSend({t:'puzzle_result',id:S.pz.id,win:win,moves:S.moves.map(function(m){return m.uci;})});return;}
   var exp=1/(1+Math.pow(10,(S.pz.rating-profile.puzzle)/400)),k=profile.pzSolved<20?40:22,b=profile.puzzle;
   profile.puzzle=Math.max(100,Math.round(profile.puzzle+k*((win?1:0)-exp)));S.delta=profile.puzzle-b;S.ratingAfter=profile.puzzle;
   if(win){profile.pzSolved++;profile.pzStreak++;profile.pzBest=Math.max(profile.pzBest,profile.pzStreak);}else profile.pzStreak=0;

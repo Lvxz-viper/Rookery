@@ -1,8 +1,20 @@
-# Rookery 3.1
+# Rookery 3.2
 
 Chess server for your home computer: the website, online games, daily (correspondence) games,
 accounts, friends, private messages, achievements, spectating, puzzles, an opening trainer,
 Stockfish analysis and a control room.
+
+## What is new in 3.2 (security)
+
+- Sign-in tokens stored only as SHA-256 hashes; private messages and automatic backups encrypted with AES-256-GCM
+  (key in `data/secret.key`, download a copy from the control room under Server, Security)
+- Recovery codes for every account and a Forgot password screen; passwords need 8+ characters and no common words
+- Accounts lock for 15 minutes after 10 wrong passwords; the control room locks for an hour after 30 failed sign-ins
+- Signed-in devices list with sign-out, sign-in history and alerts on new sign-ins
+- Two-step sign-in (authenticator app) for the owner and staff in the control room
+- Emergency button that signs every player and staff session out
+- Puzzle solves are verified on the server
+- Limits on new guests and connections per network; unused guests and old sessions are cleaned up automatically
 
 ## What is new in 3.1
 

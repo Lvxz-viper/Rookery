@@ -594,6 +594,13 @@ ol.rules li{margin:8px 0}
   .ptitle.prof>.row{gap:8px}
   .ptitle.prof>.row>.btn{flex:1 1 auto;justify-content:center}
 }
+/* ---------- 3.2: account security ---------- */
+.linkbtn{color:var(--brass2);font-size:13.5px;text-align:left;padding:2px 0;text-decoration:underline;text-underline-offset:3px;justify-self:start}
+.codes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}
+.codes code{font:600 15px/1 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.06em;background:var(--felt);border:1px solid var(--line2);border-radius:var(--r2);padding:11px 10px;text-align:center;color:var(--brass2);user-select:all}
+.dev{font-size:20px;width:30px;text-align:center;flex:none}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;background:var(--baize2);color:var(--muted);vertical-align:1px;margin-left:6px}
+.pill.on{background:rgba(128,185,140,.16);color:var(--win)}
 
 </style>
 </head><body>
@@ -1931,7 +1938,7 @@ function startPuzzle(pz,daily){
 function reportPuzzle(S,win){
   if(S.reported)return;S.reported=true;
   pzRecent.push(S.pz.id);if(pzRecent.length>300)pzRecent=pzRecent.slice(-300);store.set('pzrecent',pzRecent);
-  if(ONLINE&&NET.ok){S.pending=true;netSend({t:'puzzle_result',id:S.pz.id,win:win});return;}
+  if(ONLINE&&NET.ok){S.pending=true;netSend({t:'puzzle_result',id:S.pz.id,win:win,moves:S.moves.map(function(m){return m.uci;})});return;}
   var exp=1/(1+Math.pow(10,(S.pz.rating-profile.puzzle)/400)),k=profile.pzSolved<20?40:22,b=profile.puzzle;
   profile.puzzle=Math.max(100,Math.round(profile.puzzle+k*((win?1:0)-exp)));S.delta=profile.puzzle-b;S.ratingAfter=profile.puzzle;
   if(win){profile.pzSolved++;profile.pzStreak++;profile.pzBest=Math.max(profile.pzBest,profile.pzStreak);}else profile.pzStreak=0;
@@ -2169,7 +2176,7 @@ function prefsPage(){
     '<section class="blk"><h2>Pieces</h2><div class="card"><div class="swatches">'+ps+'</div></div></section>'+
     '<section class="blk"><h2>Gameplay</h2><div class="card" style="padding-block:4px">'+row('sound','Sounds','Moves, captures, checks and low time')+row('premove','Premoves','Plan your next move while your opponent thinks')+row('legal','Show legal moves','Dots on the squares a piece can reach')+row('coords','Coordinates','Files and ranks on the board edge')+row('anim','Piece animation','Slide pieces between squares')+row('autoQueen','Always promote to a queen','Skip the promotion picker')+row('autoFlip','Flip in pass and play','Turn the board toward the player to move')+row('evalInGame','Evaluation bar after games','Also shown during pass and play')+row('confirm','Confirm resign and draw','Ask for a second click')+'</div></section></div>'+
     '<div class="stack">'+(ONLINE?'':'<section class="blk"><h2>Your name</h2><div class="card"><input id="nameIn" maxlength="20" value="'+esc(settings.name)+'" autocomplete="off" aria-label="Display name"></div></section>')+
-    '<section class="blk"><h2>About Rookery</h2><div class="card" style="display:grid;gap:10px"><p class="note">Engine: '+engineName()+'. '+(ONLINE?'Version 3.0, running on your own server.':'Offline edition.')+'</p>'+
+    '<section class="blk"><h2>About Rookery</h2><div class="card" style="display:grid;gap:10px"><p class="note">Engine: '+engineName()+'. '+(ONLINE?'Version 3.2, running on your own server.':'Offline edition.')+'</p>'+
     '<p class="fine">Keyboard: ← and → step through moves, F flips the board. Right-click and drag to draw arrows.</p>'+
     '<p class="fine"><a href="#licenses">Licenses and credits</a> · <a href="#terms">Terms</a> · <a href="#privacy">Privacy</a></p></div></section></div></div>';}
 
@@ -2177,10 +2184,10 @@ function prefsPage(){
 function authModal(mode){
   var su=mode==='signup';
   openModal('<h2>'+(su?'Create your account':'Sign in')+'</h2><p class="note">'+(su?'Your current ratings and games move to the new account.':'Use the username and password you chose.')+'</p>'+
-    '<form class="form" data-form="'+mode+'"><label>Username<input name="u" id="authU" autocomplete="username" maxlength="20" spellcheck="false" required></label><label>Password<input name="p" id="authP" type="password" autocomplete="'+(su?'new-password':'current-password')+'" minlength="6" required></label>'+
+    '<form class="form" data-form="'+mode+'"><label>Username<input name="u" id="authU" autocomplete="username" maxlength="20" spellcheck="false" required></label><label>Password<input name="p" id="authP" type="password" autocomplete="'+(su?'new-password':'current-password')+'" minlength="8" required></label>'+
     '<div class="err" role="alert"></div><button class="btn pri lg" type="submit">'+(su?'Create account':'Sign in')+'</button>'+
     '<button type="button" class="btn ghost" data-act="'+(su?'login':'signup')+'">'+(su?'I already have an account':'Create a new account')+'</button></form>');}
-function passwordModal(){openModal('<h2>Change password</h2><form class="form" data-form="password"><label>Current password<input id="pwOld" type="password" autocomplete="current-password" required></label><label>New password<input id="pwNew" type="password" autocomplete="new-password" minlength="6" required></label><div class="err" role="alert"></div><button class="btn pri lg" type="submit">Change password</button></form>');}
+function passwordModal(){openModal('<h2>Change password</h2><form class="form" data-form="password"><label>Current password<input id="pwOld" type="password" autocomplete="current-password" required></label><label>New password<input id="pwNew" type="password" autocomplete="new-password" minlength="8" required></label><div class="err" role="alert"></div><button class="btn pri lg" type="submit">Change password</button></form>');}
 function avatarModal(){var a=myAvatar();
   openModal('<h2>Your avatar</h2><p class="note">Pick a piece and a color.</p><div class="form"><div class="avpick">'+'kqrbnp'.split('').map(function(p){return '<button class="'+(a.p===p?'on':'')+'" data-act="avp" data-k="'+p+'">'+avatar({p:p,c:a.c},'')+'</button>';}).join('')+'</div><div class="avpick">'+TINTS.map(function(t,i){return '<button class="'+(a.c===i?'on':'')+'" data-act="avc" data-k="'+i+'">'+avatar({p:a.p,c:i},'sm')+'</button>';}).join('')+'</div></div>');}
 function setAvatar(a){if(NET.me){NET.me.avatar=a;netSend({t:'profile',avatar:a});}else store.set('avatar',a);var m=modalStack[modalStack.length-1];if(m){closeModal(m);avatarModal();}renderNav();if(!isBoardRoute())renderPage();}
@@ -2863,7 +2870,7 @@ function privacyHTML(){return ''+
  '<tr><td>Games, ratings, puzzles, achievements</td><td>To run games, ratings, profiles, reviews and leaderboards. Games are public.</td><td>Until you delete your account; finished games stay in the history with your name replaced by “Deleted player”</td></tr>'+
  '<tr><td>Bio, country, avatar</td><td>Optional. Shown on your public profile.</td><td>Until you change them or delete your account</td></tr>'+
  '<tr><td>Game chat</td><td>Delivered to your opponent and kept with reports so staff can review abuse.</td><td>Not saved with the game; recent lines are kept in memory until the server restarts</td></tr>'+
- '<tr><td>Private messages</td><td>Delivered to the friend you write to. Staff only see them if one of you reports the conversation.</td><td>1 year, then deleted automatically</td></tr>'+
+ '<tr><td>Private messages</td><td>Delivered to the friend you write to and stored encrypted. Staff only see them if one of you reports the conversation.</td><td>1 year, then deleted automatically</td></tr>'+
  '<tr><td>Network address (IP) and device type</td><td>Security, preventing abuse and spam, and enforcing suspensions.</td><td>Deleted after 90 days without a visit</td></tr>'+
  '<tr><td>Reports and contact messages</td><td>To handle your request or report.</td><td>Up to 180 days after they are handled</td></tr>'+
  '<tr><td>Browser storage</td><td>Your settings, offline progress and sign-in token are kept in your own browser. We use no tracking cookies.</td><td>Until you clear your browser data</td></tr></tbody></table>'+
@@ -2871,7 +2878,7 @@ function privacyHTML(){return ''+
  '<h2>Who can see your data</h2><ul><li><b>Everyone:</b> your username, avatar, title, country, bio, ratings, achievements, online status and finished games.</li><li><b>Your friends:</b> private messages you send them.</li><li><b>Rookery staff:</b> account details, reports and reported conversations, only to moderate and run the service.</li><li><b>Service providers:</b> traffic passes through Cloudflare, which provides the secure connection to the site. Cloudflare processes it under its own privacy policy.</li></ul><p>We never sell or rent personal data. We share it with authorities only when the law requires us to.</p>'+
  '<h2>Your rights</h2><ul><li><b>Access and copy:</b> download all your data from <a href="#prefs">Settings</a>.</li><li><b>Correction:</b> edit your profile at any time.</li><li><b>Deletion:</b> delete your account from Settings. It is removed right away and cannot be undone.</li><li><b>Other requests or questions:</b> write to us '+contactLine()+'.</li></ul>'+
  '<h2>Children</h2><p>Rookery is not meant for children under 13 and we do not knowingly collect their data. If you believe a child under 13 has an account, contact us and we will delete it.</p>'+
- '<h2>Security</h2><p>Connections are encrypted, passwords are hashed, sign-in attempts are rate limited and the server is not exposed directly to the internet. No system is perfectly secure, so please use a password you do not use elsewhere.</p>'+
+ '<h2>Security</h2><p>Connections are encrypted, passwords and sign-in tokens are stored only as one-way hashes, private messages and backups are encrypted, accounts lock after repeated wrong passwords, and the server is not exposed directly to the internet. No system is perfectly secure, so please use a password you do not use elsewhere.</p>'+
  '<h2>Changes</h2><p>If this policy changes in an important way, we will show a notice on the site.</p>';}
 
 function rulesHTML(){return ''+
@@ -2963,6 +2970,89 @@ var _netMsg6=netMsg;netMsg=function(m){
   if(m.t==='welcome'||m.t==='cfg'){applyCommercial();applyTheme();legalNotice();if(LEGAL_ROUTES.indexOf(route)>=0||route==='prefs')renderPage();}
   if(m.t==='me'&&route==='prefs')renderPage();};
 document.addEventListener('click',function(e){var a=e.target.closest('[data-act=reloadsite]');if(a)location.href=location.pathname;});
+
+
+/* app7.js */
+/* ==========================================================================
+   Rookery 3.2: account security. Recovery codes, forgot password,
+   signed-in devices, sign-in alerts, stronger passwords.
+   ========================================================================== */
+I.key=ic('<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>');
+I.devices=ic('<rect x="2" y="5" width="14" height="10" rx="1.5"/><path d="M6 19h6M9 15v4"/><rect x="17" y="9" width="5" height="10" rx="1.2"/>');
+I.lock=ic('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>');
+NET.sessions=null;
+
+/* ---------- forgot password ---------- */
+var _authModal7=authModal;authModal=function(mode){_authModal7(mode);if(mode!=='login')return;var f=$('.modal form[data-form=login] .err');if(!f)return;
+  f.insertAdjacentHTML('afterend','<button type="button" class="linkbtn" data-act="forgot">Forgot your password?</button>');};
+function recoverModal(){if(modalStack.length)closeModal();
+  openModal('<h2>Reset your password</h2><p class="note">Use one of the recovery codes you saved when you created your account. Each code works once.</p>'+
+    '<form class="form" data-form="recover7"><label>Username<input id="rcU" autocomplete="username" maxlength="20" spellcheck="false" required></label>'+
+    '<label>Recovery code<input id="rcC" autocomplete="one-time-code" maxlength="14" spellcheck="false" placeholder="XXXXX-XXXXX" style="text-transform:uppercase;letter-spacing:.08em" required></label>'+
+    '<label>New password<input id="rcP" type="password" autocomplete="new-password" minlength="8" required></label><p class="fine">At least 8 characters. Avoid common passwords and your username.</p>'+
+    '<div class="err" role="alert"></div><button class="btn pri lg" type="submit">Reset password</button>'+
+    '<p class="fine">No recovery codes? Send a request through the <a href="#contact" data-close>contact form</a> from the device you usually play on.</p></form>');}
+
+/* ---------- recovery codes ---------- */
+function codesModal(codes,fresh){NET.lastCodes=codes;
+  openModal('<h2>'+(fresh?'Save your recovery codes':'Your new recovery codes')+'</h2><p class="note">If you ever forget your password, one of these codes lets you set a new one. Each code works once. Keep them somewhere safe, like a notes app or a photo, and do not share them.'+(fresh?'':' Your old codes no longer work.')+'</p>'+
+    '<div class="codes">'+codes.map(function(c){return '<code>'+esc(c)+'</code>';}).join('')+'</div>'+
+    '<div class="row"><button class="btn" data-act="codescopy">'+I.copy+'Copy</button><button class="btn" data-act="codesdl">'+I.download+'Download</button></div>'+
+    '<div class="form"><button class="btn pri lg" data-close>I saved them</button></div>',{noclose:true});}
+function passwordPrompt(title,note,form){openModal('<h2>'+title+'</h2><p class="note">'+note+'</p><form class="form" data-form="'+form+'"><label>Your password<input id="ppPw" type="password" autocomplete="current-password" required></label><div class="err" role="alert"></div><button class="btn pri lg" type="submit">Continue</button></form>');}
+
+/* ---------- devices ---------- */
+function devicesModal(){NET.sessions=null;netSend({t:'sessions'});openModal('<h2>Signed-in devices</h2><div id="devBox"><div class="search"><div class="spin"></div></div></div>',{wide:true});}
+function renderDevices(){var box=$('#devBox'),S=NET.sessions;if(!box||!S)return;
+  var row=function(x){return '<div class="li">'+'<span class="dev">'+(x.device==='phone'?'📱':'💻')+'</span><span class="tx"><b>'+(x.device==='phone'?'Phone':'Computer')+(x.current?' <span class="pill on">This device</span>':'')+'</b><small>Signed in '+new Date(x.created).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})+', last active '+ago(x.last)+(x.ip?', network '+esc(x.ip):'')+'</small></span>'+(x.current?'':'<button class="btn sm" data-act="devend" data-id="'+x.id+'">Sign out</button>')+'</div>';};
+  box.innerHTML='<div class="list">'+S.list.map(row).join('')+'</div>'+(S.list.length>1?'<div class="row" style="margin-top:12px"><button class="btn bad" data-act="devothers">Sign out all other devices</button></div>':'')+
+    (S.logins&&S.logins.length?'<div class="h" style="margin:20px 0 6px">Recent sign-ins</div><div class="list">'+S.logins.map(function(l){return '<div class="li"><span class="tx"><b>'+(l.device==='phone'?'Phone':'Computer')+'</b><small>'+new Date(l.ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+(l.ip?', network '+esc(l.ip):'')+'</small></span></div>';}).join('')+'</div>':'')+
+    '<p class="fine" style="margin-top:14px">See a device you do not recognise? Sign it out and change your password.</p>';}
+
+/* ---------- settings: security section ---------- */
+var _prefsPage7=prefsPage;prefsPage=function(){var h=_prefsPage7(),me=NET.me;if(!ONLINE||!me||me.guest)return h;
+  var left=me.recoveryLeft||0;
+  var sec='<section class="blk"><h2>Security</h2><div class="card" style="display:grid;gap:14px">'+
+    (!me.hasRecovery||left<=2?'<div class="msg '+(me.hasRecovery?'info':'no')+'">'+I.warn.replace('<svg','<svg width="18" height="18"')+'<span>'+(me.hasRecovery?'Only '+left+' recovery code'+(left===1?'':'s')+' left. Create new ones.':'You have no recovery codes. If you forget your password you cannot get back in.')+'</span></div>':'')+
+    '<div class="set" style="padding:0;border:0"><div><b>Recovery codes</b><small>'+(me.hasRecovery?left+' of 8 left. Each one resets your password once.':'Not set up yet')+'</small></div><button class="btn'+(me.hasRecovery?'':' pri')+'" data-act="codesnew">'+I.key+(me.hasRecovery?'New codes':'Create codes')+'</button></div>'+
+    '<div class="set" style="padding:0;border:0"><div><b>Signed-in devices</b><small>See where your account is open and sign devices out</small></div><button class="btn" data-act="devices">'+I.devices+'Devices</button></div>'+
+    '<div class="set" style="padding:0;border:0"><div><b>Password</b><small>Changing it signs out every other device</small></div><button class="btn" data-act="password">'+I.lock+'Change</button></div>'+
+    '</div></section>';
+  var mk='<section class="blk"><h2>Privacy and account</h2>';return h.indexOf(mk)>=0?h.replace(mk,sec+mk):h+sec;};
+
+/* ---------- actions, forms, messages ---------- */
+var _onAct7=onAct;onAct=function(e){var a=e.target.closest('[data-act]');if(!a){_onAct7(e);return;}
+  switch(a.dataset.act){
+    case 'forgot':recoverModal();return;
+    case 'codesnew':passwordPrompt('Create new recovery codes','Your old codes stop working once you create new ones.','codes7');return;
+    case 'codescopy':copyText((NET.lastCodes||[]).join('\n'),'Recovery codes');return;
+    case 'codesdl':{try{var b=new Blob(['Rookery recovery codes for '+(NET.me?NET.me.name:'')+'\r\nEach code works once.\r\n\r\n'+(NET.lastCodes||[]).join('\r\n')+'\r\n'],{type:'text/plain'}),u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download='rookery-recovery-codes.txt';document.body.appendChild(l);l.click();l.remove();setTimeout(function(){URL.revokeObjectURL(u);},3000);}catch(er){}}return;
+    case 'devices':devicesModal();return;
+    case 'devend':netSend({t:'session_end',id:a.dataset.id});return;
+    case 'devothers':if(a.dataset.armed){netSend({t:'session_end',others:true});}else{a.dataset.armed='1';a.textContent='Click again to confirm';}return;
+  }
+  _onAct7(e);};
+var _onSubmit7=onSubmit;onSubmit=function(form){var f=form.dataset.form;
+  if(f==='recover7'){var b=form.querySelector('button[type=submit]');form.querySelector('.err').textContent='';b.disabled=true;
+    if(!netSend({t:'recover',username:$('#rcU').value.trim(),code:$('#rcC').value.trim(),password:$('#rcP').value}))b.disabled=false;return;}
+  if(f==='codes7'){var b2=form.querySelector('button[type=submit]');b2.disabled=true;NET.codesPending=true;if(!netSend({t:'recovery_new',password:$('#ppPw').value}))b2.disabled=false;return;}
+  if(f==='signup'||f==='password'){var pw=f==='signup'?$('#authP'):$('#pwNew');if(pw&&pw.value.length<8){var er=form.querySelector('.err');if(er)er.textContent='Use at least 8 characters for your password.';else toast('Use at least 8 characters for your password.');return;}}
+  _onSubmit7(form);};
+var _netMsg7=netMsg;netMsg=function(m){
+  switch(m.t){
+    case 'recovery_codes':if(m.fresh){setTimeout(function(){codesModal(m.codes,true);},350);}else{while(modalStack.length)closeModal();codesModal(m.codes,false);}NET.codesPending=false;return;
+    case 'sessions':NET.sessions=m;renderDevices();return;
+    case 'session_ended':store.set('token',null);NET.ok=false;var w=NET.ws;NET.ws=null;try{w&&w.close();}catch(e){}
+      while(modalStack.length)closeModal();openModal('<h2>Signed out</h2><p class="note">'+esc(m.msg||'You were signed out on this device.')+'</p><div class="form"><button class="btn pri" data-act="reloadsite">OK</button></div>',{noclose:true});return;
+    case 'login_alert':if(NET.justSignedIn){NET.justSignedIn=false;return;}sfx('notify');toast('New sign-in to your account on a '+(m.device==='phone'?'phone':'computer')+'. Not you? Open Settings, then Devices.',7000);return;
+    case 'error':if(NET.codesPending){NET.codesPending=false;var er=$('.modal form[data-form=codes7] .err');if(er){er.textContent=m.msg;var bt=$('.modal form[data-form=codes7] button[type=submit]');if(bt)bt.disabled=false;return;}}break;
+    case 'auth_error':{var rf=$('.modal form[data-form=recover7]');if(rf){rf.querySelector('.err').textContent=m.msg;rf.querySelector('button[type=submit]').disabled=false;return;}}break;
+  }
+  if(m.t==='auth_ok')NET.justSignedIn=true;
+  _netMsg7(m);
+  if(m.t==='auth_ok')setTimeout(function(){NET.justSignedIn=false;},3000);
+  if(m.t==='welcome'&&NET.me&&!NET.me.guest&&!NET.me.hasRecovery&&!store.get('rcnag:'+NET.me.id,false)){store.set('rcnag:'+NET.me.id,true);setTimeout(function(){toast('Protect your account: create recovery codes in Settings, under Security.',8000);},1500);}
+  if(m.t==='me'&&route==='prefs')renderPage();};
 
 /* ---------- start ---------- */
 boot();

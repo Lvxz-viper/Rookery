@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const vm = require('vm');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 const TERMS_VERSION = '2026-10-31';
 const PORT = +process.env.PORT || 3001;
 const ROOT = __dirname;
@@ -76,6 +76,8 @@ function newPlayer(id, name) {
     if (n) log('[db] migrated ' + n + ' players from version 1');
   } catch (e) {}
 })();
+setImmediate(() => { let n = 0; for (const c of Object.values(db.dms || {})) for (const m of c.msgs) if (typeof m.t === 'string' && !m.t.startsWith('e1:')) { m.t = enc(m.t); n++; } if (n) { log('[security] encrypted ' + n + ' stored private messages'); save(); } });
+if (!db.sessHashed) { const ns = {}; for (const [t, x] of Object.entries(db.sessions)) ns[crypto.createHash('sha256').update(t).digest('hex')] = x; db.sessions = ns; db.sessHashed = true; }
 db.settings = Object.assign({}, DEFAULT_SETTINGS, db.settings || {}); db.ipBans = db.ipBans || {}; db.audit = db.audit || [];
 ['daily', 'dailyInvites', 'dailySeeks', 'dms'].forEach(k => { db[k] = db[k] || {}; });
 db.stats = Object.assign({ dau: {}, peak: {} }, db.stats || {});
@@ -121,6 +123,12 @@ function storeRecord(r) { indexRecord(r); fs.appendFile(GAMESF, JSON.stringify(r
 
 /* ================= helpers ================= */
 const rid = n => crypto.randomBytes(n).toString('hex');
+/* Sign-in tokens are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in. */
+const tokHash = t => crypto.createHash('sha256').update(String(t)).digest('hex');
+const ipHint = ip => { ip = String(ip || ''); if (ip.includes('.')) return ip.split('.').slice(0, 2).join('.') + '.x.x'; if (ip.includes(':')) return ip.split(':').slice(0, 2).join(':') + ':…'; return ''; };
+function sessGet(tok) { return typeof tok === 'string' && tok.length > 10 && tok.length < 200 ? db.sessions[tokHash(tok)] || null : null; }
+function sessNew(pid, ws) { const tok = rid(24); db.sessions[tokHash(tok)] = { pid, created: Date.now(), last: Date.now(), device: ws && ws.device || null, ua: ws && ws.ua || '', ip: ipHint(ws && ws.ip) }; return tok; }
+function sessDel(tok) { if (tok) delete db.sessions[tokHash(tok)]; }
 const P = id => db.players[id];
 const RESERVED = new Set(['admin', 'rookery', 'moderator', 'system', 'guest', 'pip', 'marlowe', 'juno', 'odile', 'vasco', 'sable', 'oracle', 'stockfish']);
 function cleanText(s, n) { return String(s || '').replace(/[\u0000-\u001f\u007f<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, n); }
@@ -153,6 +161,7 @@ function me(p) {
     puzzle: { r: p.puzzle.r, solved: p.puzzle.solved, failed: p.puzzle.failed, streak: p.puzzle.streak, best: p.puzzle.best },
     hist: p.hist.slice(-400), created: p.created, muted: isMuted(p), title: p.title || null, bio: p.bio || '', country: p.country || '', role: p.role || '',
     ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, dmUnread: dmUnread(p.id), dailyTurn: dailyTurnCount(p.id),
+    recoveryLeft: p.guest ? 0 : (p.recovery || []).filter(x => !x.used).length, hasRecovery: !!(p.recovery && p.recovery.length),
     blocked: (p.blocked || []).map(id => P(id) ? { id, name: P(id).name } : null).filter(Boolean), consent: p.consent || null };
 }
 function status(pid) { const g = gameOf(pid); return g ? 'playing' : online(pid) ? 'online' : 'offline'; }
@@ -166,12 +175,90 @@ function notifyFriends(pid) { const p = P(pid); if (!p) return; p.friends.forEac
 function blockedEither(a, b) { const A = P(a), B = P(b); return !!((A && (A.blocked || []).includes(b)) || (B && (B.blocked || []).includes(a))); }
 const rateMap = new Map();
 function rate(key, n, ms) { const now = Date.now(), a = (rateMap.get(key) || []).filter(t => now - t < ms); a.push(now); rateMap.set(key, a); return a.length > n; }
+/* ----- account security ----- */
+const acctFails = new Map();
+/* ----- two-step sign-in (TOTP, RFC 6238) for the control room ----- */
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+function b32enc(buf) { let bits = 0, val = 0, out = ''; for (const x of buf) { val = (val << 8) | x; bits += 8; while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; } } if (bits) out += B32[(val << (5 - bits)) & 31]; return out; }
+function b32dec(str) { let bits = 0, val = 0; const out = []; for (const ch of String(str).toUpperCase().replace(/[^A-Z2-7]/g, '')) { val = (val << 5) | B32.indexOf(ch); bits += 5; if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; } } return Buffer.from(out); }
+function totpAt(secret, step) { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(step)); const h = crypto.createHmac('sha1', b32dec(secret)).update(b).digest(), o = h[19] & 15; return String((h.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, '0'); }
+function totpOk(secret, code, holder) {
+  code = String(code || '').replace(/\D/g, ''); if (code.length !== 6) return false;
+  const now = Math.floor(Date.now() / 30000);
+  for (const d of [0, -1, 1]) { const st = now + d; if (totpAt(secret, st) === code) { if (holder && holder.totpLast >= st) return false; if (holder) holder.totpLast = st; return true; } }
+  return false;
+}
+const adminFails = [];
+function adminFail(ip) { const now = Date.now(); adminFails.push(now); while (adminFails.length && now - adminFails[0] > 3600e3) adminFails.shift(); if (adminFails.length === 30) log('[security] control room locked for an hour after 30 failed sign-ins (last from ' + ip + ')'); }
+function adminLocked() { const now = Date.now(); while (adminFails.length && now - adminFails[0] > 3600e3) adminFails.shift(); return adminFails.length >= 30; }
+/* A solve counts only if the moves sent are legal and follow the solution (any checkmate also counts). */
+function puzzleSolved(pz, moves) {
+  if (!Array.isArray(moves) || moves.length < 1 || moves.length > 60) return false;
+  const pos = new Pos(pz.fen); let i = 0;
+  for (const u of moves) {
+    const mv = pos.parseUci(String(u)); if (!mv) return false;
+    const uci = pos.uci(mv); pos.make(mv);
+    const st = pos.status();
+    if (uci !== pz.moves[i]) return st.over && st.reason === 'checkmate' && i < pz.moves.length && ((pz.setup ? i - 1 : i) % 2 === 0);
+    i++;
+    if (st.over && st.reason === 'checkmate') return true;
+  }
+  return i >= pz.moves.length;
+}
+function acctFail(id, ip) { const now = Date.now(), a = (acctFails.get(id) || []).filter(t => now - t < 15 * 60e3); a.push(now); acctFails.set(id, a);
+  if (a.length === 10) { const t = P(id); log('[security] ' + (t ? t.name : id) + ' locked for 15 minutes after 10 wrong passwords (last from ' + ip + ')'); } }
+function acctLocked(id) { const now = Date.now(), a = (acctFails.get(id) || []).filter(t => now - t < 15 * 60e3); return a.length >= 10; }
+const COMMON_PW = new Set(('123456 1234567 12345678 123456789 1234567890 password password1 password123 qwerty qwerty123 qwertyuiop 111111 11111111 000000 00000000 '
+  + 'abc123 abcd1234 iloveyou admin admin123 welcome welcome1 letmein monkey dragon football baseball master sunshine princess shadow superman '
+  + 'michael 123123 123321 654321 666666 696969 7777777 88888888 987654321 1q2w3e4r 1q2w3e4r5t zaq12wsx asdfghjkl asdf1234 passw0rd trustno1 '
+  + 'chess chess123 chesschess checkmate rookery rookery123 mohamed mohammed ahmed123 112233 121212 102030 ').split(' ').filter(Boolean));
+function weakPassword(pw, user) {
+  if (pw.length < 8) return 'Use at least 8 characters for your password.';
+  if (pw.length > 100) return 'That password is too long.';
+  const l = pw.toLowerCase();
+  if (COMMON_PW.has(l) || /^(.)\1+$/.test(pw) || /^\d+$/.test(pw) && pw.length < 10) return 'That password is too easy to guess. Mix words, numbers and symbols.';
+  if (user && l.includes(String(user).toLowerCase())) return 'Do not use your username in your password.';
+  return null;
+}
+function endOtherSessions(p, ws) {
+  const keep = ws && ws.token ? tokHash(ws.token) : null;
+  for (const [t, x] of Object.entries(db.sessions)) if (x.pid === p.id && t !== keep) delete db.sessions[t];
+  const set = conns.get(p.id); if (set) [...set].forEach(w => { if (w !== ws && (!keep || tokHash(w.token) !== keep)) { send(w, { t: 'session_ended', msg: 'You were signed out on this device.' }); try { w.close(); } catch (e) {} } });
+}
+function noteSignIn(p, ws) {
+  (p.logins || (p.logins = [])).unshift({ ts: Date.now(), device: ws.device || null, ip: ipHint(ws.ip) }); p.logins = p.logins.slice(0, 12);
+  sendP(p.id, { t: 'login_alert', device: ws.device || 'device', ts: Date.now() });
+}
+const RC_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function newRecoveryCodes(p) {
+  const codes = [];
+  for (let i = 0; i < 8; i++) { const b = crypto.randomBytes(10); let c = ''; for (let k = 0; k < 10; k++) c += RC_ALPHA[b[k] % RC_ALPHA.length]; codes.push(c.slice(0, 5) + '-' + c.slice(5)); }
+  p.recovery = codes.map(c => ({ h: tokHash('rc:' + p.id + ':' + c.replace(/-/g, '')), used: null })); p.recoveryAt = Date.now();
+  return codes;
+}
+function useRecoveryCode(p, code) {
+  const h = tokHash('rc:' + p.id + ':' + String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''));
+  const r = (p.recovery || []).find(x => !x.used && crypto.timingSafeEqual(Buffer.from(x.h), Buffer.from(h)));
+  if (!r) return false; r.used = Date.now(); return true;
+}
+/* ----- encryption at rest (private messages and backups); the key lives in data/secret.key ----- */
+let SECRET = null;
+function secretKey() {
+  if (SECRET) return SECRET;
+  const f = path.join(DATA, 'secret.key');
+  try { SECRET = Buffer.from(fs.readFileSync(f, 'utf8').trim(), 'hex'); if (SECRET.length === 32) return SECRET; } catch (e) {}
+  SECRET = crypto.randomBytes(32); fs.mkdirSync(DATA, { recursive: true }); fs.writeFileSync(f, SECRET.toString('hex')); log('[security] created data/secret.key');
+  return SECRET;
+}
+function enc(str) { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', secretKey(), iv), out = Buffer.concat([c.update(String(str), 'utf8'), c.final()]);
+  return 'e1:' + Buffer.concat([iv, c.getAuthTag(), out]).toString('base64'); }
+function dec(s) { if (typeof s !== 'string' || !s.startsWith('e1:')) return s; try { const b = Buffer.from(s.slice(3), 'base64'), d = crypto.createDecipheriv('aes-256-gcm', secretKey(), b.subarray(0, 12)); d.setAuthTag(b.subarray(12, 28)); return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8'); } catch (e) { return '[message cannot be read]'; } }
 function playerData(p) {
-  const out = Object.assign({}, p); delete out.pass; delete out.strikes;
+  const out = Object.assign({}, p); delete out.pass; delete out.strikes; delete out.recovery; delete out.totp;
   out.friends = p.friends.map(id => P(id) ? P(id).name : null).filter(Boolean);
   out.reqIn = undefined; out.reqOut = undefined; out.blocked = (p.blocked || []).map(id => P(id) ? P(id).name : null).filter(Boolean);
   const games = (byPlayer.get(p.id) || []).map(id => records.get(id)).filter(Boolean);
-  const dms = Object.values(db.dms).filter(c => c.a === p.id || c.b === p.id).map(c => { const o = P(c.a === p.id ? c.b : c.a); return { with: o ? o.name : 'Deleted player', messages: c.msgs.map(m => ({ from: m.f === p.id ? 'me' : (o ? o.name : 'them'), text: m.t, at: new Date(m.ts).toISOString() })) }; });
+  const dms = Object.values(db.dms).filter(c => c.a === p.id || c.b === p.id).map(c => { const o = P(c.a === p.id ? c.b : c.a); return { with: o ? o.name : 'Deleted player', messages: c.msgs.map(m => ({ from: m.f === p.id ? 'me' : (o ? o.name : 'them'), text: dec(m.t), at: new Date(m.ts).toISOString() })) }; });
   const daily = Object.values(db.daily).filter(g => g.w === p.id || g.b === p.id);
   return { exported: new Date().toISOString(), site: 'Rookery', account: out, games, dailyGames: daily, privateMessages: dms };
 }
@@ -303,7 +390,7 @@ function dmList(pid) {
     if (c.a !== pid && c.b !== pid) continue;
     const other = P(c.a === pid ? c.b : c.a); if (!other) continue;
     const last = c.msgs[c.msgs.length - 1]; const r = (c.read || {})[pid] || 0;
-    out.push({ id: other.id, who: pub(other, 'blitz'), online: online(other.id), last: last ? { text: last.t, ts: last.ts, mine: last.f === pid } : null,
+    out.push({ id: other.id, who: pub(other, 'blitz'), online: online(other.id), last: last ? { text: dec(last.t), ts: last.ts, mine: last.f === pid } : null,
       unread: c.msgs.filter(m => m.ts > r && m.f !== pid).length });
   }
   return out.sort((a, b) => ((b.last && b.last.ts) || 0) - ((a.last && a.last.ts) || 0));
@@ -653,16 +740,18 @@ function limited(key) {
 
 async function handle(ws, m) {
   if (m.t === 'hello') {
-    let s = typeof m.token === 'string' && db.sessions[m.token];
+    if (ws.pid) return;
+    if (db.ipBans[ws.ip]) { send(ws, { t: 'banned', msg: 'Access from your network has been blocked.' }); return ws.close(); }
+    let s = sessGet(m.token);
     if (s && !P(s.pid)) s = null;
     if (!s) {
+      if (rate('guest:' + (ws.ip || 'x'), 40, 3600e3)) { send(ws, { t: 'banned', msg: 'Too many new visitors from your network. Please try again in a little while.' }); return ws.close(); }
       const p = newPlayer(rid(5), guestName());
       db.players[p.id] = p;
-      ws.token = rid(24); db.sessions[ws.token] = { pid: p.id, created: Date.now() };
+      ws.token = sessNew(p.id, ws);
       save();
-    } else ws.token = m.token;
-    if (db.ipBans[ws.ip]) { send(ws, { t: 'banned', msg: 'Access from your network has been blocked.' }); return ws.close(); }
-    const p = P(db.sessions[ws.token].pid);
+    } else { ws.token = m.token; s.last = Date.now(); if (ws.device) s.device = ws.device; s.ip = ipHint(ws.ip); }
+    const p = P(sessGet(ws.token).pid);
     const bi = banInfo(p);
     if (bi) { send(ws, { t: 'banned', msg: bi }); return ws.close(); }
     p.lastIp = ws.ip; p.ips = [ws.ip].concat((p.ips || []).filter(x => x !== ws.ip)).slice(0, 6);
@@ -682,46 +771,50 @@ async function handle(ws, m) {
       const u = String(m.username || '').trim();
       if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) return send(ws, { t: 'auth_error', msg: 'Usernames use 3 to 20 letters, numbers or underscores.' });
       if (db.names[u.toLowerCase()] || RESERVED.has(u.toLowerCase())) return send(ws, { t: 'auth_error', msg: 'That username is taken.' });
-      const pw = String(m.password || '');
-      if (pw.length < 6 || pw.length > 100) return send(ws, { t: 'auth_error', msg: 'Passwords need at least 6 characters.' });
+      const pw = String(m.password || ''), weak = weakPassword(pw, u);
+      if (weak) return send(ws, { t: 'auth_error', msg: weak });
       const salt = rid(16);
       p.pass = { salt, hash: await hashPw(pw, salt) };
       if (db.names[u.toLowerCase()]) return send(ws, { t: 'auth_error', msg: 'That username is taken.' });
       p.username = u; p.name = u; p.guest = false; db.names[u.toLowerCase()] = p.id; p.consent = { v: TERMS_VERSION, ts: Date.now(), age13: true };
+      const codes = newRecoveryCodes(p);
       save(); log('[account] new account ' + u);
-      return conns.get(pid).forEach(w => send(w, { t: 'auth_ok', token: w.token, me: me(p), msg: 'Account created' }));
+      conns.get(pid).forEach(w => send(w, { t: 'auth_ok', token: w.token, me: me(p), msg: 'Account created' }));
+      return send(ws, { t: 'recovery_codes', codes, fresh: true });
     }
     case 'login': {
       const ip = ws.ip || 'x';
       if (limited('login:' + ip)) return send(ws, { t: 'auth_error', msg: 'Too many attempts. Try again in 10 minutes.' });
       const tid = db.names[String(m.username || '').trim().toLowerCase()];
       const t = tid && P(tid);
-      if (!t || !(await checkPw(String(m.password || ''), t.pass))) return send(ws, { t: 'auth_error', msg: 'Wrong username or password.' });
+      if (t && acctLocked(t.id)) return send(ws, { t: 'auth_error', msg: 'This account is locked for 15 minutes after too many wrong passwords. If you forgot it, use your recovery code.' });
+      if (!t || !(await checkPw(String(m.password || ''), t.pass))) { if (t) acctFail(t.id, ws.ip); return send(ws, { t: 'auth_error', msg: 'Wrong username or password.' }); }
       if (banInfo(t)) return send(ws, { t: 'auth_error', msg: banInfo(t) });
       if (gameOf(pid)) return send(ws, { t: 'auth_error', msg: 'Finish your current game first.' });
       unwatch(ws);
-      const tok = rid(24); db.sessions[tok] = { pid: t.id, created: Date.now() };
-      if (p.guest && p.ratings.blitz.games + p.ratings.bullet.games + p.ratings.rapid.games === 0) delete db.sessions[ws.token];
-      ws.token = tok; save();
+      if (p.guest && p.ratings.blitz.games + p.ratings.bullet.games + p.ratings.rapid.games === 0) sessDel(ws.token);
+      const tok = sessNew(t.id, ws);
+      ws.token = tok; noteSignIn(t, ws); save();
       detach(ws); attach(ws, t.id);
       return send(ws, { t: 'auth_ok', token: tok, me: me(t), msg: 'Welcome back, ' + t.name });
     }
     case 'logout': {
       if (gameOf(pid)) return send(ws, { t: 'auth_error', msg: 'Finish your current game first.' });
-      delete db.sessions[ws.token];
+      sessDel(ws.token);
       const g = newPlayer(rid(5), guestName());
       db.players[g.id] = g;
-      ws.token = rid(24); db.sessions[ws.token] = { pid: g.id, created: Date.now() };
+      ws.token = sessNew(g.id, ws);
       save(); unwatch(ws); detach(ws); attach(ws, g.id);
       return send(ws, { t: 'auth_ok', token: ws.token, me: me(g), msg: 'Signed out' });
     }
     case 'password': {
       if (p.guest) return;
-      if (!(await checkPw(String(m.old || ''), p.pass))) return send(ws, { t: 'auth_error', msg: 'Your current password is wrong.' });
-      const pw = String(m.password || '');
-      if (pw.length < 6 || pw.length > 100) return send(ws, { t: 'auth_error', msg: 'Passwords need at least 6 characters.' });
+      if (acctLocked(pid)) return send(ws, { t: 'auth_error', msg: 'Too many wrong passwords. Try again in 15 minutes.' });
+      if (!(await checkPw(String(m.old || ''), p.pass))) { acctFail(pid, ws.ip); return send(ws, { t: 'auth_error', msg: 'Your current password is wrong.' }); }
+      const pw = String(m.password || ''), bad = weakPassword(pw, p.username);
+      if (bad) return send(ws, { t: 'auth_error', msg: bad });
       const salt = rid(16); p.pass = { salt, hash: await hashPw(pw, salt) };
-      for (const [t, s] of Object.entries(db.sessions)) if (s.pid === pid && t !== ws.token) delete db.sessions[t];
+      endOtherSessions(p, ws);
       save(); return send(ws, { t: 'info', msg: 'Password changed. Other devices were signed out.' });
     }
     case 'profile': {
@@ -916,7 +1009,7 @@ async function handle(ws, m) {
       const o = P(m.id); if (!o) return;
       const c = db.dms[dmKey(pid, o.id)];
       if (c) { (c.read || (c.read = {}))[pid] = Date.now(); save(); }
-      send(ws, { t: 'dm_thread', id: o.id, who: pub(o, 'blitz'), online: online(o.id), friend: p.friends.includes(o.id), msgs: c ? c.msgs.slice(-150) : [] });
+      send(ws, { t: 'dm_thread', id: o.id, who: pub(o, 'blitz'), online: online(o.id), friend: p.friends.includes(o.id), msgs: c ? c.msgs.slice(-150).map(x => ({ f: x.f, t: dec(x.t), ts: x.ts })) : [] });
       return conns.get(pid).forEach(w => send(w, { t: 'dm_unread', n: dmUnread(pid) }));
     }
     case 'dm_send': {
@@ -929,7 +1022,7 @@ async function handle(ws, m) {
       let text = String(m.text || '').replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 1000); if (!text) return;
       text = filterText(text, p);
       const k = dmKey(pid, o.id), c = db.dms[k] || (db.dms[k] = { a: pid, b: o.id, msgs: [], read: {} });
-      const msg = { f: pid, t: text, ts: t }; c.msgs.push(msg); if (c.msgs.length > 400) c.msgs.splice(0, c.msgs.length - 400);
+      const msg = { f: pid, t: text, ts: t }; c.msgs.push({ f: pid, t: enc(text), ts: t }); if (c.msgs.length > 400) c.msgs.splice(0, c.msgs.length - 400);
       c.read[pid] = t; save();
       sendP(pid, { t: 'dm', with: o.id, msg });
       sendP(o.id, { t: 'dm', with: pid, from: pub(p, 'blitz'), msg });
@@ -982,6 +1075,48 @@ async function handle(ws, m) {
       delete db.dailySeeks[x.id]; save();
       return createDaily(x.by, pid, x.days, x.color);
     }
+    /* ----- account security ----- */
+    case 'sessions': {
+      const mine = ws.token ? tokHash(ws.token) : '';
+      const list = Object.entries(db.sessions).filter(([, x]) => x.pid === pid).map(([h, x]) => ({ id: h.slice(0, 16), current: h === mine, device: x.device || null, created: x.created, last: x.last || x.created, ip: x.ip || '' }))
+        .sort((a, b) => (b.current - a.current) || (b.last - a.last));
+      return send(ws, { t: 'sessions', list, logins: (p.logins || []).slice(0, 10) });
+    }
+    case 'session_end': {
+      const id = String(m.id || ''), mine = ws.token ? tokHash(ws.token) : '';
+      if (m.others) endOtherSessions(p, ws);
+      else if (id.length === 16) for (const [h, x] of Object.entries(db.sessions)) if (x.pid === pid && h.startsWith(id) && h !== mine) {
+        delete db.sessions[h]; const set = conns.get(pid); if (set) [...set].forEach(w => { if (w.token && tokHash(w.token) === h) { send(w, { t: 'session_ended', msg: 'You were signed out on this device.' }); try { w.close(); } catch (e) {} } });
+      }
+      save(); send(ws, { t: 'info', msg: m.others ? 'Signed out on all other devices' : 'Device signed out' });
+      return handle(ws, { t: 'sessions' });
+    }
+    case 'recovery_new': {
+      if (p.guest) return;
+      if (acctLocked(pid)) return send(ws, { t: 'error', msg: 'Too many wrong passwords. Try again in 15 minutes.' });
+      if (!(await checkPw(String(m.password || ''), p.pass))) { acctFail(pid, ws.ip); return send(ws, { t: 'error', msg: 'That password is not right.' }); }
+      const codes = newRecoveryCodes(p); save(); log('[account] ' + p.name + ' created new recovery codes');
+      send(ws, { t: 'recovery_codes', codes }); return conns.get(pid).forEach(w => send(w, { t: 'me', me: me(p) }));
+    }
+    case 'recover': {
+      if (limited('recover:' + (ws.ip || 'x'))) return send(ws, { t: 'auth_error', msg: 'Too many attempts. Try again in 10 minutes.' });
+      const tid = db.names[String(m.username || '').trim().toLowerCase()], t = tid && P(tid);
+      if (!t || acctLocked(t.id)) return send(ws, { t: 'auth_error', msg: 'That username and recovery code do not match.' });
+      const pw = String(m.password || ''), weak = weakPassword(pw, t.username); if (weak) return send(ws, { t: 'auth_error', msg: weak });
+      if (!useRecoveryCode(t, m.code)) { acctFail(t.id, ws.ip); return send(ws, { t: 'auth_error', msg: 'That username and recovery code do not match.' }); }
+      if (banInfo(t)) return send(ws, { t: 'auth_error', msg: banInfo(t) });
+      if (gameOf(pid)) return send(ws, { t: 'auth_error', msg: 'Finish your current game first.' });
+      const salt = rid(16); t.pass = { salt, hash: await hashPw(pw, salt) };
+      for (const [h, x] of Object.entries(db.sessions)) if (x.pid === t.id) delete db.sessions[h];
+      kick(t.id, 'Your password was reset. Sign in again on this device.');
+      acctFails.delete(t.id); unwatch(ws);
+      if (p.guest && p.ratings.blitz.games + p.ratings.bullet.games + p.ratings.rapid.games === 0) sessDel(ws.token);
+      ws.token = sessNew(t.id, ws); noteSignIn(t, ws); save();
+      log('[account] ' + t.name + ' reset their password with a recovery code'); audit(ws.ip, 'password reset with recovery code', t.name);
+      detach(ws); attach(ws, t.id);
+      const left = t.recovery.filter(x => !x.used).length;
+      return send(ws, { t: 'auth_ok', token: ws.token, me: me(t), msg: 'Password changed. ' + left + ' recovery code' + (left === 1 ? '' : 's') + ' left.' });
+    }
     /* ----- safety and privacy ----- */
     case 'block': {
       const t = P(m.id); if (!t || t.id === pid) return;
@@ -998,7 +1133,7 @@ async function handle(ws, m) {
       const t = P(m.id); if (!t || t.id === pid) return;
       if (rate('report:' + pid, 10, 3600e3)) return send(ws, { t: 'info', msg: 'Report sent. Thank you.' });
       const c = db.dms[dmKey(pid, t.id)];
-      const chat = m.where === 'dm' && c ? c.msgs.slice(-30).map(x => ({ name: x.f === pid ? p.name : t.name, text: x.t })) : [];
+      const chat = m.where === 'dm' && c ? c.msgs.slice(-30).map(x => ({ name: x.f === pid ? p.name : t.name, text: dec(x.t) })) : [];
       db.reports.push({ id: rid(4), ts: Date.now(), by: pid, byName: p.name, who: t.id, whoName: t.name, gid: null,
         reason: cleanText(m.reason, 60) || (m.where === 'dm' ? 'Private messages' : 'Profile'), note: cleanText(m.note, 300) || '', chat, open: true });
       if (db.reports.length > 300) db.reports.shift();
@@ -1060,6 +1195,10 @@ async function handle(ws, m) {
     case 'puzzle_result': {
       const pz = puzzles.get(String(m.id || ''));
       if (!pz || p.puzzle.recent.includes(pz.id)) return send(ws, { t: 'puzzle_rating', r: p.puzzle.r, d: 0 });
+      if (m.win) {
+        if (!puzzleSolved(pz, m.moves)) { log('[puzzles] rejected an unverified solve from ' + p.name); m.win = false; return send(ws, { t: 'puzzle_rating', r: p.puzzle.r, d: 0 }); }
+        if (rate('pz:' + pid, 1, 2500) || rate('pzday:' + pid, 400, 864e5)) return send(ws, { t: 'puzzle_rating', r: p.puzzle.r, d: 0 });
+      }
       const exp = 1 / (1 + Math.pow(10, (pz.rating - p.puzzle.r) / 400)), k = p.puzzle.solved + p.puzzle.failed < 20 ? 40 : 22;
       const before = p.puzzle.r;
       p.puzzle.r = Math.max(100, Math.round(p.puzzle.r + k * ((m.win ? 1 : 0) - exp)));
@@ -1158,7 +1297,7 @@ function runBackup() {
   try {
     fs.mkdirSync(dir, { recursive: true });
     const name = 'rookery-backup-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.json';
-    fs.writeFileSync(path.join(dir, name), JSON.stringify({ exported: new Date().toISOString(), version: VERSION, db, games: [...records.values()] }));
+    fs.writeFileSync(path.join(dir, name), 'RKBK1:' + enc(JSON.stringify({ exported: new Date().toISOString(), version: VERSION, db, games: [...records.values()] })));
     const old = fs.readdirSync(dir).filter(f => /^rookery-backup-.*\.json$/.test(f)).sort();
     while (old.length > (db.backup.keep || 14)) { try { fs.unlinkSync(path.join(dir, old.shift())); } catch (e) {} }
     db.backup.last = Date.now(); db.backup.lastFile = path.join(dir, name); db.backup.error = null;
@@ -1174,6 +1313,9 @@ function retention() {
   db.reports = db.reports.filter(r => r.open || now - r.ts < 180 * 864e5);
   if (db.inbox) db.inbox = db.inbox.filter(x => x.open || now - x.ts < 180 * 864e5);
   db.audit = db.audit.filter(x => now - x.ts < 365 * 864e5);
+  for (const [h, x] of Object.entries(db.sessions)) if (now - (x.last || x.created || 0) > 180 * 864e5 || !db.players[x.pid]) { delete db.sessions[h]; n++; }
+  for (const p of Object.values(db.players)) if (p.guest && !online(p.id) && now - (p.seen || 0) > 3 * 864e5 && CATS.every(c => !p.ratings[c].games) && !p.puzzle.solved && !p.friends.length) {
+    delete db.players[p.id]; for (const [h, x] of Object.entries(db.sessions)) if (x.pid === p.id) delete db.sessions[h]; n++; }
   if (n) { save(); log('[privacy] retention cleanup: ' + n + ' items'); }
 }
 setTimeout(retention, 30000); setInterval(retention, 12 * 3600e3);
@@ -1196,6 +1338,7 @@ function overview(isMod) {
     audit: db.audit.slice(-80).reverse(), chat: chatLog.slice(-120).reverse(), activity: activity(),
     titles: all.filter(p => p.title).length, updater: updaterInfo(), backup: Object.assign({ folder: backupDir() }, db.backup),
     upt: uptimeSummary(), staff: all.filter(p => p.role).map(p => ({ id: p.id, name: p.name, role: p.role, online: online(p.id) })),
+    security: { twofa: !!(admin && admin.totp), sessions: Object.keys(db.sessions).length, encrypted: true },
     inbox: isMod ? [] : (db.inbox || []).filter(x => x.open).slice(-100).reverse(), contactEmail: db.contactEmail || '', filter: db.filter, dailyCount: Object.values(db.daily).filter(g => !g.over).length, dmCount: Object.keys(db.dms).length, achList: ACH
   };
 }
@@ -1314,7 +1457,7 @@ function analytics() {
   return { heat, tcs, reasons, res, avgMoves: n ? Math.round(plies / n / 2) : 0, retention: old.length ? Math.round(back.length / old.length * 100) : null, retentionBase: old.length,
     devices: dev, days, top, puzzlesSolved: pz, achievements: acc.reduce((a, p) => a + Object.keys(p.ach || {}).length, 0) };
 }
-async function adminMore(route, req, res, b, ip, role, aud) {
+async function adminMore(route, req, res, b, ip, role, aud, sess) {
   const owner = role === 'owner';
   if (route === 'analytics') return json(res, 200, analytics());
   if (route === 'logs') return json(res, 200, { lines: logBuf.slice(-500) });
@@ -1326,6 +1469,33 @@ async function adminMore(route, req, res, b, ip, role, aud) {
     db.contactEmail = e; save(); aud(ip, 'contact email', e || 'removed');
     const m = JSON.stringify({ t: 'cfg', cfg: publicCfg() }); conns.forEach(st => st.forEach(ws => send(ws, m)));
     return json(res, 200, { ok: true });
+  }
+  if (route === 'twofa') {
+    const holder = owner ? admin : P(sess.pid); if (!holder) return json(res, 400, { error: 'Unknown account' });
+    if (b.action === 'start') { sess.pending2fa = b32enc(crypto.randomBytes(20)); const label = encodeURIComponent('Rookery:' + (owner ? 'Owner' : holder.name));
+      return json(res, 200, { secret: sess.pending2fa, uri: 'otpauth://totp/' + label + '?secret=' + sess.pending2fa + '&issuer=Rookery&digits=6&period=30' }); }
+    if (b.action === 'confirm') { if (!sess.pending2fa || !totpOk(sess.pending2fa, b.code)) return json(res, 400, { error: 'That code is not right. Check the time on your phone and try again.' });
+      holder.totp = sess.pending2fa; holder.totpLast = 0; sess.pending2fa = null; if (owner) fs.writeFileSync(ADMINF, JSON.stringify(admin)); else save();
+      aud(ip, 'two-step sign-in on', ''); return json(res, 200, { ok: true }); }
+    if (b.action === 'disable') { if (!holder.totp || !totpOk(holder.totp, b.code, holder)) return json(res, 400, { error: 'Enter a current code to turn it off' });
+      delete holder.totp; if (owner) fs.writeFileSync(ADMINF, JSON.stringify(admin)); else save(); aud(ip, 'two-step sign-in off', ''); return json(res, 200, { ok: true }); }
+    return json(res, 200, { enabled: !!holder.totp });
+  }
+  if (route === 'emergency') {
+    if (!owner) return json(res, 403, { error: 'Only the owner can do that' });
+    const n = Object.keys(db.sessions).length;
+    db.sessions = {}; for (const [k, v] of adminTokens) if (v !== sess) adminTokens.delete(k);
+    const msg = JSON.stringify({ t: 'session_ended', msg: 'For your security, everyone has been signed out. Please sign in again.' });
+    wss.clients.forEach(w => { send(w, msg); try { w.close(); } catch (e) {} });
+    if (b.announce) db.announce = { text: cleanText(b.announce, 200), ts: Date.now() };
+    save(); log('[security] EMERGENCY: all ' + n + ' sessions signed out by the owner'); aud(ip, 'emergency sign-out', n + ' sessions');
+    return json(res, 200, { ok: true, n });
+  }
+  if (route === 'secretkey') {
+    if (!owner) return json(res, 403, { error: 'Only the owner can do that' });
+    aud(ip, 'downloaded encryption key', '');
+    res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="rookery-secret.key"', 'Cache-Control': 'no-store' });
+    return res.end(secretKey().toString('hex'));
   }
   if (route === 'gameedit') {
     const r = records.get(b.id); if (!r) return json(res, 404, { error: 'Game not found' });
@@ -1365,7 +1535,7 @@ async function adminMore(route, req, res, b, ip, role, aud) {
   if (route === 'restore') {
     if (!owner) return json(res, 403, { error: 'Only the owner can restore a backup' });
     const name = String(b.file || ''); if (!/^rookery-backup-[\w-]+\.json$/.test(name)) return json(res, 400, { error: 'Pick a backup from the list' });
-    let data; try { data = JSON.parse(fs.readFileSync(path.join(backupDir(), name), 'utf8')); } catch (e) { return json(res, 400, { error: 'That backup cannot be read: ' + e.message }); }
+    let data; try { let raw = fs.readFileSync(path.join(backupDir(), name), 'utf8'); if (raw.startsWith('RKBK1:')) { raw = dec(raw.slice(6)); if (raw === '[message cannot be read]') throw new Error('it was made with a different encryption key'); } data = JSON.parse(raw); } catch (e) { return json(res, 400, { error: 'That backup cannot be read: ' + e.message }); }
     if (!data || !data.db || !data.db.players) return json(res, 400, { error: 'That file is not a Rookery backup' });
     runBackup();
     db = data.db; records.clear(); byPlayer.clear(); (data.games || []).forEach(indexRecord); rewriteGames();
@@ -1383,14 +1553,18 @@ async function adminApi(req, res, route) {
     await ensureAdmin();
     if (limited('admin:' + ip)) return json(res, 429, { error: 'Too many attempts. Try again in 10 minutes.' });
     const b = await body(req);
+    if (adminLocked()) return json(res, 429, { error: 'The control room is locked for an hour after many failed sign-ins. Check the server log.' });
     if (b.username) {
       const tid = db.names[String(b.username).trim().toLowerCase()], t = tid && P(tid);
-      if (!t || !['mod', 'admin'].includes(t.role) || !(await checkPw(String(b.password || ''), t.pass)) || banInfo(t)) { audit(ip, 'failed sign in', String(b.username).slice(0, 30)); return json(res, 401, { error: 'Wrong username or password, or this account is not a moderator' }); }
+      if (t && acctLocked(t.id)) return json(res, 429, { error: 'This account is locked for 15 minutes after too many wrong passwords.' });
+      if (!t || !['mod', 'admin'].includes(t.role) || !(await checkPw(String(b.password || ''), t.pass)) || banInfo(t)) { if (t) acctFail(t.id, ip); adminFail(ip); audit(ip, 'failed sign in', String(b.username).slice(0, 30)); return json(res, 401, { error: 'Wrong username or password, or this account is not a moderator' }); }
+      if (t.totp) { if (!b.code) return json(res, 401, { error: 'Enter the 6-digit code from your authenticator app', need2fa: true }); if (!totpOk(t.totp, b.code, t)) { adminFail(ip); audit(ip, 'failed sign in', t.name + ' (wrong code)'); return json(res, 401, { error: 'That code is not right', need2fa: true }); } }
       const tok = rid(24); adminTokens.set(tok, { exp: Date.now() + 12 * 3600e3, role: t.role, pid: t.id, name: t.name });
       log('[admin] ' + t.name + ' signed in as ' + t.role); audit(ip, 'sign in', t.name + ' (' + t.role + ')');
       return json(res, 200, { token: tok, role: t.role, name: t.name });
     }
-    if (!(await checkPw(String(b.password || ''), admin))) { audit(ip, 'failed sign in', ''); return json(res, 401, { error: 'Wrong password' }); }
+    if (!(await checkPw(String(b.password || ''), admin))) { adminFail(ip); audit(ip, 'failed sign in', ''); return json(res, 401, { error: 'Wrong password' }); }
+    if (admin.totp) { if (!b.code) return json(res, 401, { error: 'Enter the 6-digit code from your authenticator app', need2fa: true }); if (!totpOk(admin.totp, b.code, admin)) { adminFail(ip); audit(ip, 'failed sign in', 'Owner (wrong code)'); return json(res, 401, { error: 'That code is not right', need2fa: true }); } }
     const tok = rid(24); adminTokens.set(tok, { exp: Date.now() + 12 * 3600e3, role: 'owner', pid: null, name: 'Owner' });
     log('[admin] signed in from ' + ip); audit(ip, 'sign in', 'Owner');
     return json(res, 200, { token: tok, role: 'owner', name: 'Owner' });
@@ -1403,10 +1577,10 @@ async function adminApi(req, res, route) {
   const who = sess.name;
   const aud = (i, a, d) => audit(i, a, (d ? d + ' ' : '') + '(' + who + ')');
   const MOD_GET = new Set(['overview', 'players', 'player', 'games', 'logs-none']);
-  const MOD_POST = new Set(['player', 'report', 'endgame']);
+  const MOD_POST = new Set(['player', 'report', 'endgame', 'twofa']);
   const MOD_ACTIONS = new Set(['mute', 'unmute', 'kick', 'ban', 'unban', 'message']);
   if (isMod && !(req.method === 'GET' ? MOD_GET : MOD_POST).has(route)) return json(res, 403, { error: 'Moderators cannot do that' });
-  if (route === 'overview') return json(res, 200, Object.assign(overview(isMod), { me: { role, name: who } }));
+  if (route === 'overview') return json(res, 200, Object.assign(overview(isMod), { me: { role, name: who, twofa: role === 'owner' ? !!(admin && admin.totp) : !!(P(sess.pid) && P(sess.pid).totp) } }));
   const qs = new URL(req.url, 'http://x').searchParams;
   if (route === 'players') return json(res, 200, adminPlayers(qs.get('q'), { kind: qs.get('kind'), sort: qs.get('sort'), offset: qs.get('offset'), limit: qs.get('limit') }));
   if (route === 'player' && req.method === 'GET') { const d = adminPlayer(qs.get('id')); return d ? json(res, 200, d) : json(res, 404, { error: 'Player not found' }); }
@@ -1424,7 +1598,7 @@ async function adminApi(req, res, route) {
     res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="rookery-players.csv"', 'Cache-Control': 'no-store' });
     return res.end('\ufeff' + csv);
   }
-  if (['analytics', 'logs', 'backups'].includes(route) && req.method === 'GET') return adminMore(route, req, res, {}, ip, role, aud);
+  if (['analytics', 'logs', 'backups', 'secretkey'].includes(route) && req.method === 'GET') return adminMore(route, req, res, {}, ip, role, aud, sess);
   if (req.method !== 'POST') return json(res, 404, { error: 'Unknown' });
   const b = await body(req);
   const OWNER_ONLY = new Set(['password', 'restart', 'restore', 'settings', 'ipban', 'backupdir']);
@@ -1558,14 +1732,14 @@ async function adminApi(req, res, route) {
   if (route === 'password') {
     const pw = String(b.password || '');
     if (pw.length < 8) return json(res, 400, { error: 'Use at least 8 characters' });
-    const salt = rid(16); admin = { salt, hash: await hashPw(pw, salt) };
+    const salt = rid(16); admin = Object.assign({}, admin, { salt, hash: await hashPw(pw, salt) });
     fs.writeFileSync(ADMINF, JSON.stringify(admin));
     try { fs.unlinkSync(path.join(DATA, 'ADMIN-PASSWORD.txt')); } catch (e) {}
     for (const [k, v] of adminTokens) if (v.role === 'owner') adminTokens.delete(k);
     const t2 = rid(24); adminTokens.set(t2, { exp: Date.now() + 12 * 3600e3, role: 'owner', pid: null, name: 'Owner' });
     return json(res, 200, { ok: true, token: t2 });
   }
-  return await adminMore(route, req, res, b, ip, role, aud);
+  return await adminMore(route, req, res, b, ip, role, aud, sess);
 }
 
 const SEC_HEADERS = {
@@ -1606,7 +1780,9 @@ const server = http.createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 wss.on('connection', (ws, req) => {
-  ws.alive = true; ws.ip = ipOf(req); ws.bucket = 40; ws.bt = Date.now();
+  ws.alive = true; ws.ip = ipOf(req); ws.bucket = 40; ws.bt = Date.now(); ws.ua = String(req.headers['user-agent'] || '').slice(0, 160);
+  let same = 0; wss.clients.forEach(w => { if (w.ip === ws.ip) same++; });
+  if (same > 16 || wss.clients.size > 3000) { try { ws.close(1013, 'Too many connections'); } catch (e) {} return; }
   ws.device = /mobile|android|iphone|ipad/i.test(req.headers['user-agent'] || '') ? 'phone' : 'computer';
   ws.on('pong', () => { ws.alive = true; });
   ws.on('message', raw => {

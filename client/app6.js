@@ -53,7 +53,7 @@ function privacyHTML(){return ''+
  '<tr><td>Games, ratings, puzzles, achievements</td><td>To run games, ratings, profiles, reviews and leaderboards. Games are public.</td><td>Until you delete your account; finished games stay in the history with your name replaced by “Deleted player”</td></tr>'+
  '<tr><td>Bio, country, avatar</td><td>Optional. Shown on your public profile.</td><td>Until you change them or delete your account</td></tr>'+
  '<tr><td>Game chat</td><td>Delivered to your opponent and kept with reports so staff can review abuse.</td><td>Not saved with the game; recent lines are kept in memory until the server restarts</td></tr>'+
- '<tr><td>Private messages</td><td>Delivered to the friend you write to. Staff only see them if one of you reports the conversation.</td><td>1 year, then deleted automatically</td></tr>'+
+ '<tr><td>Private messages</td><td>Delivered to the friend you write to and stored encrypted. Staff only see them if one of you reports the conversation.</td><td>1 year, then deleted automatically</td></tr>'+
  '<tr><td>Network address (IP) and device type</td><td>Security, preventing abuse and spam, and enforcing suspensions.</td><td>Deleted after 90 days without a visit</td></tr>'+
  '<tr><td>Reports and contact messages</td><td>To handle your request or report.</td><td>Up to 180 days after they are handled</td></tr>'+
  '<tr><td>Browser storage</td><td>Your settings, offline progress and sign-in token are kept in your own browser. We use no tracking cookies.</td><td>Until you clear your browser data</td></tr></tbody></table>'+
@@ -61,7 +61,7 @@ function privacyHTML(){return ''+
  '<h2>Who can see your data</h2><ul><li><b>Everyone:</b> your username, avatar, title, country, bio, ratings, achievements, online status and finished games.</li><li><b>Your friends:</b> private messages you send them.</li><li><b>Rookery staff:</b> account details, reports and reported conversations, only to moderate and run the service.</li><li><b>Service providers:</b> traffic passes through Cloudflare, which provides the secure connection to the site. Cloudflare processes it under its own privacy policy.</li></ul><p>We never sell or rent personal data. We share it with authorities only when the law requires us to.</p>'+
  '<h2>Your rights</h2><ul><li><b>Access and copy:</b> download all your data from <a href="#prefs">Settings</a>.</li><li><b>Correction:</b> edit your profile at any time.</li><li><b>Deletion:</b> delete your account from Settings. It is removed right away and cannot be undone.</li><li><b>Other requests or questions:</b> write to us '+contactLine()+'.</li></ul>'+
  '<h2>Children</h2><p>Rookery is not meant for children under 13 and we do not knowingly collect their data. If you believe a child under 13 has an account, contact us and we will delete it.</p>'+
- '<h2>Security</h2><p>Connections are encrypted, passwords are hashed, sign-in attempts are rate limited and the server is not exposed directly to the internet. No system is perfectly secure, so please use a password you do not use elsewhere.</p>'+
+ '<h2>Security</h2><p>Connections are encrypted, passwords and sign-in tokens are stored only as one-way hashes, private messages and backups are encrypted, accounts lock after repeated wrong passwords, and the server is not exposed directly to the internet. No system is perfectly secure, so please use a password you do not use elsewhere.</p>'+
  '<h2>Changes</h2><p>If this policy changes in an important way, we will show a notice on the site.</p>';}
 
 function rulesHTML(){return ''+
@@ -154,5 +154,3 @@ var _netMsg6=netMsg;netMsg=function(m){
   if(m.t==='me'&&route==='prefs')renderPage();};
 document.addEventListener('click',function(e){var a=e.target.closest('[data-act=reloadsite]');if(a)location.href=location.pathname;});
 
-/* ---------- start ---------- */
-boot();

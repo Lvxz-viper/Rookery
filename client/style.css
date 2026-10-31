@@ -581,3 +581,10 @@ ol.rules li{margin:8px 0}
   .ptitle.prof>.row{gap:8px}
   .ptitle.prof>.row>.btn{flex:1 1 auto;justify-content:center}
 }
+/* ---------- 3.2: account security ---------- */
+.linkbtn{color:var(--brass2);font-size:13.5px;text-align:left;padding:2px 0;text-decoration:underline;text-underline-offset:3px;justify-self:start}
+.codes{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:14px 0}
+.codes code{font:600 15px/1 ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.06em;background:var(--felt);border:1px solid var(--line2);border-radius:var(--r2);padding:11px 10px;text-align:center;color:var(--brass2);user-select:all}
+.dev{font-size:20px;width:30px;text-align:center;flex:none}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;background:var(--baize2);color:var(--muted);vertical-align:1px;margin-left:6px}
+.pill.on{background:rgba(128,185,140,.16);color:var(--win)}

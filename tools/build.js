@@ -7,7 +7,7 @@ const ROOT = path.join(__dirname, '..');
 const C = path.join(ROOT, 'client');
 const read = f => fs.readFileSync(path.join(C, f), 'utf8');
 
-const order = ['base.js', 'data.js', 'engine.js', 'board.js', 'app1.js', 'app2.js', 'app3.js', 'app4.js', 'app5.js', 'app6.js'];
+const order = ['base.js', 'data.js', 'engine.js', 'board.js', 'app1.js', 'app2.js', 'app3.js', 'app4.js', 'app5.js', 'app6.js', 'app7.js'];
 let app = order.filter(f => fs.existsSync(path.join(C, f))).map(f => '/* ' + f + ' */\n' + read(f)).join('\n');
 app = app.replace('/*PIECES*/', () => read('pieces.json')).replace('/*PUZZLES*/', () => read('puzzles-builtin.json').trim());
 let tpl = read('index.html');
