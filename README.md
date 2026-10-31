@@ -1,8 +1,18 @@
-# Rookery 3.2
+# Rookery 3.3
 
 Chess server for your home computer: the website, online games, daily (correspondence) games,
 accounts, friends, private messages, achievements, spectating, puzzles, an opening trainer,
 Stockfish analysis and a control room.
+
+## What is new in 3.3 (fair play)
+
+- Fair-play checks: finished rated games are analysed with Stockfish in a separate low-priority process and players who
+  repeatedly match the engine get an automatic report (nobody is punished automatically). Switch off under Server, Rules
+- Rated games need two accounts on different networks; at most 5 rated games a day between the same pair
+- Names cannot look like staff, use blocked words, or copy another player's name (guests included)
+- Daily limits on friend requests, daily-game invitations, challenges and private messages
+- Admins and moderators cannot edit their own accounts or results of their own games; only the owner can
+- The website and control room only run their own scripts (Content-Security-Policy with script hashes)
 
 ## What is new in 3.2 (security)
 
@@ -96,6 +106,7 @@ See its status in the control room under Server, or with `pm2 logs rookery-updat
 - `server.js` the server (port 3001, change with `set PORT=4000`)
 - `core.js` chess rules, shared with the website; every move is checked on the server
 - `puzzles.js` built-in puzzles and the Lichess downloader
+- `fairplay.js` engine analysis of finished rated games
 - `client/` the website source; `node tools/build.js` builds it into `public/index.html`
 - `public/` the website, the admin page, Stockfish and fonts
 - `data/` accounts, games, puzzles and the admin password. Back this folder up.

@@ -10,7 +10,7 @@ const zlib = require('zlib');
 const vm = require('vm');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '3.2.0';
+const VERSION = '3.3.0';
 const TERMS_VERSION = '2026-10-31';
 const PORT = +process.env.PORT || 3001;
 const ROOT = __dirname;
@@ -49,7 +49,7 @@ const DAILY_DAYS = [1, 3, 7];
 const DBF = path.join(DATA, 'db.json');
 const GAMESF = path.join(DATA, 'games.jsonl');
 let db = { version: 2, players: {}, sessions: {}, names: {}, reports: [], announce: null, settings: {}, ipBans: {}, audit: [], daily: {}, dailyInvites: {}, dailySeeks: {}, dms: {}, stats: { dau: {}, peak: {} }, uptime: { events: [], since: null }, filter: null };
-const DEFAULT_SETTINGS = { maintenance: false, guestsOnline: true, signups: true, chat: true, commercial: false };
+const DEFAULT_SETTINGS = { maintenance: false, guestsOnline: true, signups: true, chat: true, commercial: false, fairplay: true };
 
 function newRatings(r) { const o = {}; CATS.forEach(c => { o[c] = { r: r || 1200, games: 0, w: 0, l: 0, d: 0, peak: r || 1200 }; }); return o; }
 function newPlayer(id, name) {
@@ -172,6 +172,14 @@ function friendsPayload(p) {
 function notifyFriends(pid) { const p = P(pid); if (!p) return; p.friends.forEach(f => { if (online(f)) sendP(f, friendsPayload(P(f))); }); }
 
 /* ================= moderation helpers ================= */
+const STAFF_WORDS = ['admin', 'moderator', 'staff', 'rookery', 'support', 'official', 'owner', 'system'];
+function badName(n, selfId) {
+  const l = String(n || '').toLowerCase().replace(/[\s_.-]/g, '');
+  if (STAFF_WORDS.some(w => l.includes(w))) return 'Names cannot look like Rookery staff.';
+  if (db.filter && (db.filter.words || []).some(w => w && l.includes(String(w).toLowerCase().replace(/\s/g, '')))) return 'Please choose a different name.';
+  const owner = db.names[String(n || '').toLowerCase()]; if (owner && owner !== selfId) return 'That name belongs to another player.';
+  return null;
+}
 function blockedEither(a, b) { const A = P(a), B = P(b); return !!((A && (A.blocked || []).includes(b)) || (B && (B.blocked || []).includes(a))); }
 const rateMap = new Map();
 function rate(key, n, ms) { const now = Date.now(), a = (rateMap.get(key) || []).filter(t => now - t < ms); a.push(now); rateMap.set(key, a); return a.length > n; }
@@ -434,10 +442,11 @@ function endDaily(g, result, reason) {
   g.over = { result, reason, ts: Date.now() };
   const W = P(g.w), B = P(g.b);
   if (!W || !B) { save(); return; }
-  const rated = g.moves.length >= 2 && result !== 'aborted';
+  const rated = g.moves.length >= 2 && result !== 'aborted' && !sameNetwork(g.w, g.b);
   const res = applyResult(W, B, 'daily', rated ? result : 'aborted', rated);
   if (result !== 'aborted' && g.moves.length >= 2) {
-    storeRecord({ id: g.id, ts: g.created, end: Date.now(), tc: 'd' + g.days, cat: 'daily', rated: true, result, reason,
+    if (rated) setTimeout(() => fairQueue(g.id), 1000);
+    storeRecord({ id: g.id, ts: g.created, end: Date.now(), tc: 'd' + g.days, cat: 'daily', rated, result, reason,
       w: { id: W.id, name: W.name, r: res.before[0], a: res.after[0] }, b: { id: B.id, name: B.name, r: res.before[1], a: res.after[1] }, moves: g.moves, times: [] });
   }
   afterGameAch(W, B, res, result, reason, g.moves.length, 'daily');
@@ -564,18 +573,68 @@ function dropChallenges(pid, reason) {
   }
 }
 
+/* ----- fair play: engine analysis of finished rated games ----- */
+const fair = require('./fairplay.js');
+let fairEngine = null; const fairQ = []; let fairBusy = false;
+function fairQueue(gid) { if (process.env.NO_FAIRPLAY === '1' || db.settings.fairplay === false) return; if (!fairQ.includes(gid) && fairQ.length < 200) fairQ.push(gid); setTimeout(fairNext, 3000); }
+async function fairNext() {
+  if (fairBusy || !fairQ.length) return; fairBusy = true;
+  const gid = fairQ.shift(), r = records.get(gid);
+  try {
+    if (r && r.moves.length >= 30) {
+      if (!fairEngine) fairEngine = fair.createEngine(path.join(PUB, 'engine', 'stockfish-18-lite-single.js'), log);
+      const st = await fair.analyseGame(fairEngine, r.moves, 10);
+      r.fair = st;
+      log('[fairplay] analysed game ' + gid + ': ' + r.w.name + ' loss ' + st[0].acpl + ' top3 ' + st[0].top3 + '%, ' + r.b.name + ' loss ' + st[1].acpl + ' top3 ' + st[1].top3 + '%');
+      [[r.w, 0], [r.b, 1]].forEach(([x, c]) => fairRecord(x.id, gid, st[c], c ? r.b.r : r.w.r));
+      save();
+    }
+  } catch (e) { log('[fairplay] ' + e.message); }
+  fairBusy = false; if (fairQ.length) setTimeout(fairNext, 1500);
+}
+/* A game is suspicious when a player rated below 2200 makes at least 15 moves in undecided positions with an average loss of
+   at most 15 centipawns and 80% of moves among Stockfish's top 3 (club players are usually around 40 to 80).
+   Two suspicious games among the last ten analysed send an automatic report; nobody is punished automatically. */
+function fairRecord(pid, gid, s, rating) {
+  const p = P(pid); if (!p || !s || !s.n) return;
+  const loss = s.acpl == null ? 0 : s.acpl;
+  const sus = s.n >= 15 && rating < 2200 && s.acpl != null && ((loss <= 15 && s.top3 >= 80) || (loss <= 20 && s.top3 >= 92));
+  const f = p.fair || (p.fair = { n: 0, last: [] });
+  f.n++; f.last.unshift({ gid, ts: Date.now(), acpl: s.acpl, match: s.match, top3: s.top3, moves: s.n, sus }); f.last = f.last.slice(0, 10);
+  const recent = f.last.filter(x => x.sus).length;
+  if (sus) log('[fairplay] ' + p.name + ' played very close to the engine in game ' + gid + ' (loss ' + s.acpl + ', top-3 match ' + s.top3 + '%)');
+  if (recent >= 2 && (!f.reported || Date.now() - f.reported > 7 * 864e5)) {
+    f.reported = Date.now();
+    db.reports.push({ id: rid(4), ts: Date.now(), by: null, byName: 'Fair-play check', who: pid, whoName: p.name, gid, reason: 'Possible engine use (automatic)',
+      note: recent + ' of the last ' + f.last.length + ' analysed rated games were very close to Stockfish: ' + f.last.filter(x => x.sus).map(x => 'loss ' + x.acpl + ', top-3 match ' + x.top3 + '%').join('; ') + '. Review the games before acting.', chat: [], open: true, auto: true });
+    if (db.reports.length > 300) db.reports.shift();
+    log('[fairplay] automatic report for ' + p.name);
+  }
+}
+/* Rated games need two accounts on different networks, and the same pair gets at most 5 rated games a day. */
+function sameNetwork(a, b) { const A = P(a), B = P(b); return !!(A && B && A.lastIp && A.lastIp === B.lastIp); }
+function pairGamesToday(a, b) { const since = Date.now() - 864e5; let n = 0; for (const id of (byPlayer.get(a) || []).slice(-80)) { const r = records.get(id); if (r && r.rated && r.end > since && (r.w.id === b || r.b.id === b)) n++; } return n; }
+function unratedReason(a, b) {
+  const A = P(a), B = P(b);
+  if (A.guest || B.guest) return 'rated games need two players with accounts';
+  if (sameNetwork(a, b)) return 'both players are on the same network';
+  if (pairGamesToday(a, b) >= 5) return 'you already played 5 rated games against each other today';
+  return null;
+}
 function createGame(a, b, tcKey, pref) {
   let w = a, bl = b;
   if (pref === 'b' || (pref === 'r' && crypto.randomInt(2))) { w = b; bl = a; }
-  const tc = tcInfo(tcKey);
-  const g = { id: rid(5), w, b: bl, tc, pos: new Pos(), moves: [], sans: [], times: [], clock: [tc.base, tc.base], last: Date.now(),
+  const tc = tcInfo(tcKey), unrated = tc.rated ? unratedReason(w, bl) : null;
+  if (unrated) tc.rated = false;
+  const g = { id: rid(5), w, b: bl, tc, unrated, pos: new Pos(), moves: [], sans: [], times: [], clock: [tc.base, tc.base], last: Date.now(),
     over: null, drawOffer: -1, rematch: {}, dc: [null, null], timer: null, spect: new Set(), chat: [], created: Date.now() };
   games.set(g.id, g); activeOf.set(w, g.id); activeOf.set(bl, g.id);
   [w, bl].forEach(p => { leaveQueues(p); cancelRooms(p); dropChallenges(p, 'started another game'); });
   sendP(w, Object.assign({ t: 'start' }, gameState(g, w)));
   sendP(bl, Object.assign({ t: 'start' }, gameState(g, bl)));
   schedule(g); broadcastStats(); notifyFriends(w); notifyFriends(bl);
-  log(`[game ${g.id}] ${P(w).name} vs ${P(bl).name} ${tc.key}`);
+  if (unrated) [w, bl].forEach(x => sendP(x, { t: 'info', msg: 'This game is casual (not rated): ' + unrated + '.' }));
+  log(`[game ${g.id}] ${P(w).name} vs ${P(bl).name} ${tc.key}${unrated ? ' casual: ' + unrated : ''}`);
   return g;
 }
 function schedule(g) {
@@ -633,6 +692,7 @@ function endGame(g, result, reason) {
   const res = applyResult(W, B, cat, result, g.tc.rated && result !== 'aborted');
   const before = res.before, after = res.after;
   if (g.tc.rated) afterGameAch(W, B, res, result, reason, g.moves.length, cat);
+  if (g.tc.rated && result !== 'aborted' && g.moves.length >= 30) fairQueue(g.id);
   save();
   if (result !== 'aborted') {
     storeRecord({ id: g.id, ts: g.created, end: Date.now(), tc: g.tc.key, cat, rated: g.tc.rated, result, reason,
@@ -771,6 +831,7 @@ async function handle(ws, m) {
       const u = String(m.username || '').trim();
       if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) return send(ws, { t: 'auth_error', msg: 'Usernames use 3 to 20 letters, numbers or underscores.' });
       if (db.names[u.toLowerCase()] || RESERVED.has(u.toLowerCase())) return send(ws, { t: 'auth_error', msg: 'That username is taken.' });
+      { const why = badName(u, p.id); if (why) return send(ws, { t: 'auth_error', msg: why }); }
       const pw = String(m.password || ''), weak = weakPassword(pw, u);
       if (weak) return send(ws, { t: 'auth_error', msg: weak });
       const salt = rid(16);
@@ -819,7 +880,7 @@ async function handle(ws, m) {
     }
     case 'profile': {
       if (m.avatar && 'kqrbnp'.includes(m.avatar.p) && m.avatar.p.length === 1 && m.avatar.c >= 0 && m.avatar.c < 8) p.avatar = { p: m.avatar.p, c: m.avatar.c | 0 };
-      if (p.guest && m.name) { const n = cleanText(m.name, 20); if (n.length >= 2) p.name = n; }
+      if (p.guest && m.name) { const n = cleanText(m.name, 20), why = badName(n, p.id); if (why) return send(ws, { t: 'error', msg: why }); if (n.length >= 2) p.name = n; }
       if (typeof m.bio === 'string') { if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to write a bio.' }); p.bio = filterText(String(m.bio).replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 300), p); }
       if (typeof m.country === 'string') p.country = /^[A-Z]{2}$/.test(m.country) ? m.country : '';
       save(); conns.get(pid).forEach(w => send(w, { t: 'me', me: me(p) })); return notifyFriends(pid);
@@ -863,6 +924,7 @@ async function handle(ws, m) {
       const to = m.to, t = P(to);
       if (!t || to === pid) return;
       if (blockedEither(pid, to)) return send(ws, { t: 'error', msg: 'You cannot challenge this player.' });
+      if (rate('chal:' + pid, 40, 3600e3)) return send(ws, { t: 'error', msg: 'You are sending challenges too fast. Try again later.' });
       { const why = canStart(p); if (why) return send(ws, { t: 'error', msg: why }); }
       if (!online(to)) return send(ws, { t: 'error', msg: t.name + ' is offline.' });
       if (gameOf(to)) return send(ws, { t: 'error', msg: t.name + ' is playing a game.' });
@@ -978,6 +1040,7 @@ async function handle(ws, m) {
         return sendP(pid, friendsPayload(p));
       }
       if (p.reqOut.includes(t.id)) return;
+      if (p.reqOut.length >= 50 || rate('freq:' + pid, 30, 864e5)) return send(ws, { t: 'error', msg: 'You have sent a lot of friend requests. Wait for some answers first.' });
       p.reqOut.push(t.id); t.reqIn.push(pid);
       save(); sendP(t.id, friendsPayload(t)); sendP(t.id, { t: 'friend_request', from: pub(p, 'blitz') });
       sendP(pid, friendsPayload(p));
@@ -1019,6 +1082,7 @@ async function handle(ws, m) {
       if (blockedEither(pid, o.id)) return send(ws, { t: 'error', msg: 'You cannot message this player.' });
       if (isMuted(p)) return send(ws, { t: 'error', msg: 'Messages are turned off for your account.' });
       const t = Date.now(); if (t - (ws.lastDm || 0) < 500) return; ws.lastDm = t;
+      if (rate('dmday:' + pid, 1500, 864e5)) return send(ws, { t: 'error', msg: 'You have sent a lot of messages today. Try again tomorrow.' });
       let text = String(m.text || '').replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 1000); if (!text) return;
       text = filterText(text, p);
       const k = dmKey(pid, o.id), c = db.dms[k] || (db.dms[k] = { a: pid, b: o.id, msgs: [], read: {} });
@@ -1048,6 +1112,8 @@ async function handle(ws, m) {
       const o = P(m.to); if (!o || o.guest || o.id === pid) return;
       if (blockedEither(pid, o.id)) return send(ws, { t: 'error', msg: 'You cannot invite this player.' });
       if (dailyGamesOf(pid).filter(g => !g.over).length >= 20) return send(ws, { t: 'error', msg: 'You can have up to 20 daily games at once.' });
+      if (Object.values(db.dailyInvites).filter(i => i.from === pid).length >= 10 || rate('dinv:' + pid, 30, 864e5)) return send(ws, { t: 'error', msg: 'You have many invitations waiting. Wait for some answers first.' });
+      if (Object.values(db.dailyInvites).some(i => i.from === pid && i.to === o.id)) return send(ws, { t: 'info', msg: 'You already invited ' + o.name });
       const days = DAILY_DAYS.includes(+m.days) ? +m.days : 3, id = rid(4);
       db.dailyInvites[id] = { id, from: pid, to: o.id, days, color: ['w', 'b', 'r'].includes(m.color) ? m.color : 'r', ts: Date.now() }; save();
       sendDailyList(pid); sendDailyList(o.id);
@@ -1364,7 +1430,7 @@ function adminPlayer(id) {
     friends: p.friends.map(f => P(f) ? P(f).name : '?'), games: ids.map(gid => summary(records.get(gid), p.id)),
     reports: db.reports.filter(r => r.who === p.id).length, puzzleStats: { r: p.puzzle.r, solved: p.puzzle.solved, failed: p.puzzle.failed, streak: p.puzzle.streak, best: p.puzzle.best },
     bio: p.bio || '', country: p.country || '', role: p.role || '', ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, muteUntil: p.muteUntil || null,
-    strikes: p.strikes || 0, device: p.device || null, hist: p.hist.slice(-200), daily: dailyGamesOf(p.id).filter(g => !g.over).length,
+    strikes: p.strikes || 0, fair: p.fair || null, device: p.device || null, hist: p.hist.slice(-200), daily: dailyGamesOf(p.id).filter(g => !g.over).length,
     linked: Object.values(db.players).filter(o => o.id !== p.id && p.lastIp && (o.ips || []).includes(p.lastIp)).slice(0, 12).map(o => ({ id: o.id, name: o.name, guest: o.guest })) };
 }
 function adminGames(q) {
@@ -1499,6 +1565,7 @@ async function adminMore(route, req, res, b, ip, role, aud, sess) {
   }
   if (route === 'gameedit') {
     const r = records.get(b.id); if (!r) return json(res, 404, { error: 'Game not found' });
+    if (!owner && sess && (r.w.id === sess.pid || r.b.id === sess.pid)) return json(res, 403, { error: 'Only the owner can change results of your own games.' });
     if (!['1-0', '0-1', '1/2-1/2'].includes(b.result)) return json(res, 400, { error: 'Pick a result' });
     r.result = b.result; r.reason = cleanText(b.reason, 40) || r.reason; r.edited = Date.now();
     rewriteGames(); aud(ip, 'edit game', r.w.name + ' vs ' + r.b.name + ' ' + r.result);
@@ -1606,6 +1673,7 @@ async function adminApi(req, res, route) {
   if (route === 'player') {
     const p = P(b.id); if (!p) return json(res, 404, { error: 'Player not found' });
     if (isMod && !MOD_ACTIONS.has(b.action)) return json(res, 403, { error: 'Moderators cannot do that' });
+    if (role !== 'owner' && sess.pid === p.id && !['logout', 'message'].includes(b.action)) return json(res, 403, { error: 'Only the owner can change staff members\' own accounts.' });
     if (isMod && b.action === 'ban' && (!(+b.minutes > 0) || +b.minutes > 10080)) return json(res, 403, { error: 'Moderators can suspend for up to 7 days' });
     if (isMod && ['mod', 'admin'].includes(p.role)) return json(res, 403, { error: 'Moderators cannot act on staff accounts' });
     if (role === 'admin' && p.role === 'admin' && sess.pid !== p.id && ['ban', 'delete', 'edit', 'role', 'password'].includes(b.action)) return json(res, 403, { error: 'Only the owner can change another admin' });
@@ -1747,6 +1815,16 @@ const SEC_HEADERS = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()', 'Cross-Origin-Opener-Policy': 'same-origin',
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; media-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 };
+/* HTML pages only run their own inline scripts: each is allowed by its SHA-256 hash, so injected scripts cannot run. */
+const cspCache = new Map();
+function pageCsp(f) {
+  let st; try { st = fs.statSync(f); } catch (e) { return SEC_HEADERS['Content-Security-Policy']; }
+  const c = cspCache.get(f); if (c && c.m === st.mtimeMs) return c.v;
+  const html = fs.readFileSync(f, 'utf8'), hashes = [];
+  for (const m of html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)) hashes.push("'sha256-" + crypto.createHash('sha256').update(m[1], 'utf8').digest('base64') + "'");
+  const v = SEC_HEADERS['Content-Security-Policy'].replace("script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'", "script-src 'self' " + hashes.join(' ') + " 'wasm-unsafe-eval'");
+  cspCache.set(f, { m: st.mtimeMs, v }); return v;
+}
 const server = http.createServer(async (req, res) => {
   for (const k in SEC_HEADERS) res.setHeader(k, SEC_HEADERS[k]);
   if ((req.headers['x-forwarded-proto'] || '') === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
@@ -1769,8 +1847,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/puzzle/daily') return json(res, 200, puzzles.daily());
     if (p === '/api/puzzle/themes') return json(res, 200, { themes: puzzles.themes(), source: puzzles.info().source, count: puzzles.info().count });
     if (p === '/api/info') return json(res, 200, { version: VERSION, online: conns.size });
-    if (p === '/' || p === '/index.html') return serveFile(req, res, path.join(PUB, 'index.html'));
-    if (p === '/admin' || p === '/admin/') return serveFile(req, res, path.join(PUB, 'admin.html'), { 'X-Robots-Tag': 'noindex' });
+    if (p === '/' || p === '/index.html') return serveFile(req, res, path.join(PUB, 'index.html'), { 'Content-Security-Policy': pageCsp(path.join(PUB, 'index.html')) });
+    if (p === '/admin' || p === '/admin/') return serveFile(req, res, path.join(PUB, 'admin.html'), { 'X-Robots-Tag': 'noindex', 'Content-Security-Policy': pageCsp(path.join(PUB, 'admin.html')) });
     if (p === '/sw.js') return serveFile(req, res, path.join(PUB, 'sw.js'), { 'Service-Worker-Allowed': '/', 'Cache-Control': 'no-cache' });
     const f = path.normalize(path.join(PUB, p));
     if (!f.startsWith(PUB + path.sep)) { res.writeHead(403); return res.end(); }
@@ -1806,6 +1884,6 @@ server.listen(PORT, async () => {
   log(`[puzzles] ${puzzles.info().count} puzzles loaded (${puzzles.info().source})`);
   if (puzzles.info().source === 'builtin' && process.env.NO_PUZZLE_DOWNLOAD !== '1') setTimeout(() => puzzles.download(), 3000);
 });
-function shutdown() { log('shutting down'); beat({ clean: true }); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {} process.exit(0); }
+function shutdown() { try { fairEngine && fairEngine.stop(); } catch (e) {} log('shutting down'); beat({ clean: true }); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (e) {} process.exit(0); }
 process.on('uncaughtException', e => { log('[crash] ' + (e.stack || e.message)); beat({ crash: String(e.message || e) }); try { fs.writeFileSync(DBF, JSON.stringify(db)); } catch (er) {} process.exit(1); });
 process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
