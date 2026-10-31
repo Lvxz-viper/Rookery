@@ -54,7 +54,7 @@ function setTab(t){tab=t;try{sessionStorage.setItem('rk-tab',t);}catch(e){}if(t=
 
 function tabs(){var c=D.counts,t=[['overview','Overview'],['live','Live games',c.playing],['players','Players'],['games','Games']];
   if(!isMod())t.push(['analytics','Analytics']);
-  t.push(['chat','Chat'],['reports','Reports',c.reports]);
+  t.push(['chat','Chat'],['reports','Reports',c.reports+(isMod()?0:(D.inbox||[]).length)]);
   if(!isMod())t.push(['moderation','Moderation'],['logs','Logs']);
   if(isOwner())t.push(['server','Server']);
   return t;}
@@ -127,8 +127,11 @@ function analyticsTab(){var A=AN;if(!A)return '<div class="card"><p class="empty
    '<div class="card"><h2>Most active players</h2>'+(A.top.length?'<table class="tbl"><tbody>'+A.top.map(function(p,i){return '<tr class="clk" data-player="'+p.id+'"><td style="color:var(--dim);width:24px">'+(i+1)+'</td><td>'+esc(p.name)+'</td><td style="text-align:right">'+p.games+' games</td></tr>';}).join('')+'</tbody></table>':'<p class="empty">No accounts yet.</p>')+'</div></div></div>';}
 function chatTab(){var C=D.chat;
   return '<div class="card"><h2>Live chat<span class="n">last '+C.length+' messages</span><span class="sp"></span>'+(D.settings.chat?'':'<span class="pill bad">Chat is off for everyone</span>')+'</h2>'+(C.length?C.map(function(c){return '<div class="chatline"><time>'+new Date(c.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})+'</time><span><b data-player="'+c.pid+'">'+esc(c.name)+':</b> '+esc(c.text)+'</span><button class="btn sm" data-pa="mute" data-id="'+c.pid+'">Turn off chat</button></div>';}).join(''):'<p class="empty">No messages since the server started.</p>')+'</div>';}
-function reportsTab(){var R=D.reports;
-  return '<div class="card"><h2>Reports<span class="n">'+R.length+'</span></h2>'+(R.length?R.map(function(r){return '<div class="rep"><div class="row"><b data-player="'+r.who+'" style="cursor:pointer">'+esc(r.whoName)+'</b><span class="note">reported by '+esc(r.byName)+', '+ago(r.ts)+'</span></div>'+(r.chat&&r.chat.length?'<div class="chat">'+r.chat.map(function(c){return '<div><b>'+esc(c.name)+':</b> '+esc(c.text)+'</div>';}).join('')+'</div>':'')+'<div class="row"><button class="btn sm" data-pa="mute" data-id="'+r.who+'">Turn off chat</button><button class="btn sm bad" data-player="'+r.who+'">Suspend…</button><button class="btn sm" data-rep="'+r.id+'">Dismiss</button></div></div>';}).join(''):'<p class="empty">No open reports.</p>')+'</div>';}
+function reportsTab(){var R=D.reports,M=D.inbox||[],KN={question:'Question',report:'Problem or player',privacy:'Privacy request',copyright:'Copyright notice',other:'Other'};
+  var inbox=isMod()?'':'<div class="card" style="margin-top:16px"><h2>Contact messages<span class="n">'+M.length+'</span></h2>'+(M.length?M.map(function(x){return '<div class="rep"><div class="row"><span class="pill '+(x.kind==='copyright'||x.kind==='privacy'?'bad':'')+'">'+esc(KN[x.kind]||x.kind)+'</span><b data-player="'+x.pid+'" style="cursor:pointer">'+esc(x.name)+'</b>'+(x.email?'<a href="mailto:'+esc(x.email)+'" class="note">'+esc(x.email)+'</a>':'<span class="note">no email</span>')+'<span class="note">'+ago(x.ts)+'</span></div><div class="chat" style="color:var(--bone2);white-space:pre-wrap">'+esc(x.text)+'</div><div class="row"><button class="btn sm" data-inbox="'+x.id+'">Done</button></div></div>';}).join(''):'<p class="empty">No messages. The contact form on the site sends messages here.</p>')+'<p class="fine" style="margin-top:8px">Answer privacy requests and copyright notices quickly; for copyright, remove the material if the notice is valid.</p></div>';
+  return reportsCard(R)+inbox;}
+function reportsCard(R){
+  return '<div class="card"><h2>Reports<span class="n">'+R.length+'</span></h2>'+(R.length?R.map(function(r){return '<div class="rep"><div class="row"><b data-player="'+r.who+'" style="cursor:pointer">'+esc(r.whoName)+'</b><span class="note">reported by '+esc(r.byName)+', '+ago(r.ts)+'</span></div>'+(r.chat&&r.chat.length?'<div class="chat">'+r.chat.map(function(c){return '<div><b>'+esc(c.name)+':</b> '+esc(c.text)+'</div>';}).join('')+'</div>':'')+(r.reason||r.note?'<p class="note"><b style="color:var(--bone)">'+esc(r.reason||'')+'</b>'+(r.note?' · '+esc(r.note):'')+'</p>':'')+'<div class="row"><button class="btn sm" data-pa="mute" data-id="'+r.who+'">Turn off chat</button><button class="btn sm bad" data-player="'+r.who+'">Suspend…</button><button class="btn sm" data-rep="'+r.id+'">Dismiss</button></div></div>';}).join(''):'<p class="empty">No open reports.</p>')+'</div>';}
 
 /* ----- moderation ----- */
 function moderationTab(){var F=D.filter||{words:[]},d=D;
@@ -156,7 +159,8 @@ function serverTab(){var d=D,st=d.settings,pz=d.puzzles,ps=pz.status||{};
   if(ps.state==='running')pzLine='Downloading: '+ps.found+' found, '+ps.mb+' MB read';
   if(ps.state==='error')pzLine+='. The last download failed: '+esc(ps.error);
   return '<div class="cols"><div class="stack">'+
-   '<div class="card"><h2>Rules</h2>'+tg('maintenance','Maintenance mode','Stops new online games and shows a notice. Games in progress finish normally.',true)+tg('signups','New accounts','Let people create accounts')+tg('guestsOnline','Guests can play online','When off, only players with an account can play online')+tg('chat','Game chat','Let players message each other during games')+'</div>'+
+   '<div class="card"><h2>Rules</h2>'+tg('maintenance','Maintenance mode','Stops new online games and shows a notice. Games in progress finish normally.',true)+tg('signups','New accounts','Let people create accounts')+tg('guestsOnline','Guests can play online','When off, only players with an account can play online')+tg('chat','Game chat','Let players message each other during games')+tg('commercial','Commercial use','Turn on before you earn money from Rookery (ads, payments, sponsors). Hides the piece sets whose license only allows non-commercial use and switches players to sets that allow it.')+'</div>'+
+   '<div class="card"><h2>Contact email</h2><p class="note" style="margin-bottom:10px">Shown on the Contact, Terms and Privacy pages. Use an address made for Rookery, not your personal one. Until you add one, people use the contact form and messages arrive under Reports.</p><form class="row" data-form="contactemail"><input id="ceIn" type="email" placeholder="rookery.contact@example.com" value="'+esc(d.contactEmail||'')+'" aria-label="Contact email"><button class="btn" type="submit">Save</button></form></div>'+
    uptimeCard(d.upt)+
    '<div class="card"><h2>Blocked network addresses<span class="n">'+d.ipBans.length+'</span></h2><p class="note" style="margin-bottom:10px">Blocks every account and guest from an address. Find addresses in a player\'s details.</p><form class="row" data-form="ipban" style="margin-bottom:8px"><input id="ipIn" placeholder="Address" aria-label="Address"><input id="ipWhy" placeholder="Reason (optional)" aria-label="Reason"><button class="btn bad" type="submit">Block</button></form>'+
      (d.ipBans.length?'<table class="tbl"><tbody>'+d.ipBans.map(function(b){return '<tr><td>'+esc(b.ip)+(b.reason?' <span style="color:var(--muted)">'+esc(b.reason)+'</span>':'')+'</td><td style="color:var(--dim)">'+ago(b.ts)+'</td><td class="acts"><button class="btn sm" data-unip="'+esc(b.ip)+'">Unblock</button></td></tr>';}).join('')+'</tbody></table>':'')+'</div>'+
@@ -256,6 +260,7 @@ function onClick(e){var b=e.target.closest('button,[data-player],a');if(!b)retur
   if(b.dataset.end){api('endgame',{gid:b.dataset.end,result:b.dataset.r}).then(done('Game ended')).catch(fail);return;}
   if(b.dataset.delgame){api('deletegame',{id:b.dataset.delgame}).then(function(){toast('Game deleted');loadGames();}).catch(fail);return;}
   if(b.dataset.restore){api('restore',{file:b.dataset.restore}).then(function(){toast('Restored. Rookery is restarting.');setTimeout(function(){location.reload();},6000);}).catch(fail);return;}
+  if(b.dataset.inbox){api('inbox',{id:b.dataset.inbox}).then(done('Marked as done')).catch(fail);return;}
   if(b.dataset.rep){api('report',{id:b.dataset.rep}).then(done('Report dismissed')).catch(fail);return;}
   if(b.dataset.setting){var k=b.dataset.setting;api('settings',{key:k,value:!D.settings[k]}).then(function(){D.settings[k]=!D.settings[k];toast('Saved');refresh();render();}).catch(fail);return;}
   if(b.dataset.unip){api('ipban',{ip:b.dataset.unip,remove:true}).then(done('Address unblocked')).catch(fail);return;}
@@ -294,6 +299,7 @@ function onSubmit(e){var f=e.target.closest('form');if(!f)return;e.preventDefaul
   if(k==='adminpw')return api('password',{password:v('np')}).then(function(r){tok=r.token;try{sessionStorage.setItem('rk-admin',tok);}catch(er){}toast('Admin password changed');document.getElementById('np').value='';}).catch(fail);
   if(k==='msg')return api('player',{id:drawerId,action:'message',text:v('msgIn')}).then(function(){toast('Message sent');document.getElementById('msgIn').value='';}).catch(fail);
   if(k==='eprofile'){var d={name:v('eName').trim(),title:v('eTitle'),bio:v('eBio'),country:v('eCountry'),avatar:{p:v('eAvP'),c:+v('eAvC')}};if(v('eCreated'))d.created=v('eCreated');return edit(d,'Profile saved');}
+  if(k==='contactemail')return api('contactemail',{email:v('ceIn').trim()}).then(done('Contact email saved')).catch(fail);
   if(k==='backupdir')return api('backupdir',{dir:v('bdir')}).then(done('Backup folder saved')).catch(fail);
   if(k==='ban')return api('player',{id:drawerId,action:'ban',minutes:+v('banFor'),reason:v('banWhy')}).then(done('Player suspended')).catch(fail);}
 app.addEventListener('click',onClick);app.addEventListener('submit',onSubmit);document.addEventListener('change',onChange);

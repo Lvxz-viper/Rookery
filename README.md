@@ -1,8 +1,19 @@
-# Rookery 3.0
+# Rookery 3.1
 
 Chess server for your home computer: the website, online games, daily (correspondence) games,
 accounts, friends, private messages, achievements, spectating, puzzles, an opening trainer,
 Stockfish analysis and a control room.
+
+## What is new in 3.1
+
+- Terms of Service, Privacy Policy, Community Rules, Licenses and Contact pages, linked in every page footer
+- Sign-up requires accepting the terms and confirming an age of 13 or more; the acceptance is recorded
+- Players can download all their data and delete their account from Settings
+- Block and report players from their profile and from private messages
+- Contact form; messages arrive in the control room under Reports
+- Automatic data retention: private messages 1 year, network addresses 90 days without a visit
+- Security headers (CSP, no framing, no sniffing) and rate limits on sign-ups, reports and contact
+- Commercial use switch in Server: hides piece sets that only allow non-commercial use
 
 ## What is new in 3.0
 

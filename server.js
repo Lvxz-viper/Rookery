@@ -10,7 +10,8 @@ const zlib = require('zlib');
 const vm = require('vm');
 const { WebSocketServer } = require('ws');
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
+const TERMS_VERSION = '2026-10-31';
 const PORT = +process.env.PORT || 3001;
 const ROOT = __dirname;
 const PUB = path.join(ROOT, 'public');
@@ -48,7 +49,7 @@ const DAILY_DAYS = [1, 3, 7];
 const DBF = path.join(DATA, 'db.json');
 const GAMESF = path.join(DATA, 'games.jsonl');
 let db = { version: 2, players: {}, sessions: {}, names: {}, reports: [], announce: null, settings: {}, ipBans: {}, audit: [], daily: {}, dailyInvites: {}, dailySeeks: {}, dms: {}, stats: { dau: {}, peak: {} }, uptime: { events: [], since: null }, filter: null };
-const DEFAULT_SETTINGS = { maintenance: false, guestsOnline: true, signups: true, chat: true };
+const DEFAULT_SETTINGS = { maintenance: false, guestsOnline: true, signups: true, chat: true, commercial: false };
 
 function newRatings(r) { const o = {}; CATS.forEach(c => { o[c] = { r: r || 1200, games: 0, w: 0, l: 0, d: 0, peak: r || 1200 }; }); return o; }
 function newPlayer(id, name) {
@@ -151,7 +152,8 @@ function me(p) {
   return { id: p.id, name: p.name, username: p.username, guest: p.guest, avatar: p.avatar, ratings: p.ratings,
     puzzle: { r: p.puzzle.r, solved: p.puzzle.solved, failed: p.puzzle.failed, streak: p.puzzle.streak, best: p.puzzle.best },
     hist: p.hist.slice(-400), created: p.created, muted: isMuted(p), title: p.title || null, bio: p.bio || '', country: p.country || '', role: p.role || '',
-    ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, dmUnread: dmUnread(p.id), dailyTurn: dailyTurnCount(p.id) };
+    ach: p.ach || {}, streak: p.streak || 0, bestStreak: p.bestStreak || 0, dmUnread: dmUnread(p.id), dailyTurn: dailyTurnCount(p.id),
+    blocked: (p.blocked || []).map(id => P(id) ? { id, name: P(id).name } : null).filter(Boolean), consent: p.consent || null };
 }
 function status(pid) { const g = gameOf(pid); return g ? 'playing' : online(pid) ? 'online' : 'offline'; }
 function friendsPayload(p) {
@@ -161,6 +163,34 @@ function friendsPayload(p) {
 function notifyFriends(pid) { const p = P(pid); if (!p) return; p.friends.forEach(f => { if (online(f)) sendP(f, friendsPayload(P(f))); }); }
 
 /* ================= moderation helpers ================= */
+function blockedEither(a, b) { const A = P(a), B = P(b); return !!((A && (A.blocked || []).includes(b)) || (B && (B.blocked || []).includes(a))); }
+const rateMap = new Map();
+function rate(key, n, ms) { const now = Date.now(), a = (rateMap.get(key) || []).filter(t => now - t < ms); a.push(now); rateMap.set(key, a); return a.length > n; }
+function playerData(p) {
+  const out = Object.assign({}, p); delete out.pass; delete out.strikes;
+  out.friends = p.friends.map(id => P(id) ? P(id).name : null).filter(Boolean);
+  out.reqIn = undefined; out.reqOut = undefined; out.blocked = (p.blocked || []).map(id => P(id) ? P(id).name : null).filter(Boolean);
+  const games = (byPlayer.get(p.id) || []).map(id => records.get(id)).filter(Boolean);
+  const dms = Object.values(db.dms).filter(c => c.a === p.id || c.b === p.id).map(c => { const o = P(c.a === p.id ? c.b : c.a); return { with: o ? o.name : 'Deleted player', messages: c.msgs.map(m => ({ from: m.f === p.id ? 'me' : (o ? o.name : 'them'), text: m.t, at: new Date(m.ts).toISOString() })) }; });
+  const daily = Object.values(db.daily).filter(g => g.w === p.id || g.b === p.id);
+  return { exported: new Date().toISOString(), site: 'Rookery', account: out, games, dailyGames: daily, privateMessages: dms };
+}
+function removePlayer(p) {
+  const id = p.id;
+  if (online(id)) kick(id, 'Your account was removed.');
+  for (const g of Object.values(db.daily)) if ((g.w === id || g.b === id) && !g.over) endDaily(g, g.w === id ? '0-1' : '1-0', 'account closed');
+  for (const [k, g] of Object.entries(db.daily)) if (g.w === id || g.b === id) { delete db.daily[k]; dailyPos.delete(k); }
+  for (const [k, x] of Object.entries(db.dailyInvites)) if (x.from === id || x.to === id) delete db.dailyInvites[k];
+  for (const [k, x] of Object.entries(db.dailySeeks)) if (x.by === id) delete db.dailySeeks[k];
+  for (const [k, c] of Object.entries(db.dms)) if (c.a === id || c.b === id) delete db.dms[k];
+  if (p.username) delete db.names[p.username.toLowerCase()];
+  Object.values(db.players).forEach(o => { ['friends', 'reqIn', 'reqOut'].forEach(k => { o[k] = o[k].filter(x => x !== id); }); if (o.blocked) o.blocked = o.blocked.filter(x => x !== id); });
+  for (const [t, x] of Object.entries(db.sessions)) if (x.pid === id) delete db.sessions[t];
+  let touched = false;
+  for (const r of records.values()) { if (r.w.id === id) { r.w.name = 'Deleted player'; touched = true; } if (r.b.id === id) { r.b.name = 'Deleted player'; touched = true; } }
+  if (touched) rewriteGames();
+  delete db.players[id]; save();
+}
 function isMuted(p) {
   if (p.muted && p.muteUntil && p.muteUntil < Date.now()) { p.muted = false; p.muteUntil = null; save(); }
   return !!p.muted;
@@ -548,7 +578,7 @@ function summary(r, pid) {
 }
 
 /* ================= protocol ================= */
-function publicCfg() { const st = db.settings; return { maintenance: st.maintenance, guestsOnline: st.guestsOnline, signups: st.signups, chat: st.chat }; }
+function publicCfg() { const st = db.settings; return { maintenance: st.maintenance, guestsOnline: st.guestsOnline, signups: st.signups, chat: st.chat, commercial: !!st.commercial, contact: db.contactEmail || '', terms: TERMS_VERSION }; }
 function banInfo(p) {
   if (p.banUntil && p.banUntil < Date.now()) { p.banned = false; p.banUntil = null; p.banReason = null; save(); }
   if (!p.banned) return null;
@@ -647,6 +677,8 @@ async function handle(ws, m) {
     case 'signup': {
       if (!p.guest) return send(ws, { t: 'auth_error', msg: 'You already have an account.' });
       if (!db.settings.signups) return send(ws, { t: 'auth_error', msg: 'New accounts are closed right now.' });
+      if (m.agree !== true) return send(ws, { t: 'auth_error', msg: 'Please accept the Terms and the Privacy Policy, and confirm you are at least 13.' });
+      if (rate('signup:' + (ws.ip || 'x'), 5, 3600e3)) return send(ws, { t: 'auth_error', msg: 'Too many new accounts from your network. Try again later.' });
       const u = String(m.username || '').trim();
       if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) return send(ws, { t: 'auth_error', msg: 'Usernames use 3 to 20 letters, numbers or underscores.' });
       if (db.names[u.toLowerCase()] || RESERVED.has(u.toLowerCase())) return send(ws, { t: 'auth_error', msg: 'That username is taken.' });
@@ -655,7 +687,7 @@ async function handle(ws, m) {
       const salt = rid(16);
       p.pass = { salt, hash: await hashPw(pw, salt) };
       if (db.names[u.toLowerCase()]) return send(ws, { t: 'auth_error', msg: 'That username is taken.' });
-      p.username = u; p.name = u; p.guest = false; db.names[u.toLowerCase()] = p.id;
+      p.username = u; p.name = u; p.guest = false; db.names[u.toLowerCase()] = p.id; p.consent = { v: TERMS_VERSION, ts: Date.now(), age13: true };
       save(); log('[account] new account ' + u);
       return conns.get(pid).forEach(w => send(w, { t: 'auth_ok', token: w.token, me: me(p), msg: 'Account created' }));
     }
@@ -708,7 +740,7 @@ async function handle(ws, m) {
       const q = queues[tc.key] || (queues[tc.key] = []);
       const mine = p.ratings[tc.cat].r;
       let best = -1, bd = Infinity;
-      q.forEach((o, i) => { if (o === pid || !online(o)) return; const d = Math.abs(P(o).ratings[tc.cat].r - mine); if (d < bd) { bd = d; best = i; } });
+      q.forEach((o, i) => { if (o === pid || !online(o) || blockedEither(o, pid)) return; const d = Math.abs(P(o).ratings[tc.cat].r - mine); if (d < bd) { bd = d; best = i; } });
       if (best >= 0) { const o = q.splice(best, 1)[0]; return createGame(o, pid, tc.key, 'r'); }
       q.push(pid);
       return sendP(pid, { t: 'queued', tc: tc.key });
@@ -737,6 +769,7 @@ async function handle(ws, m) {
     case 'challenge': {
       const to = m.to, t = P(to);
       if (!t || to === pid) return;
+      if (blockedEither(pid, to)) return send(ws, { t: 'error', msg: 'You cannot challenge this player.' });
       { const why = canStart(p); if (why) return send(ws, { t: 'error', msg: why }); }
       if (!online(to)) return send(ws, { t: 'error', msg: t.name + ' is offline.' });
       if (gameOf(to)) return send(ws, { t: 'error', msg: t.name + ' is playing a game.' });
@@ -797,7 +830,9 @@ async function handle(ws, m) {
       const msg = { from: g.w === pid ? 0 : 1, name: p.name, text, ts: t };
       g.chat.push(msg); if (g.chat.length > 200) g.chat.shift();
       chatLog.push({ ts: t, gid: g.id, pid, name: p.name, text }); if (chatLog.length > 400) chatLog.shift();
-      return toPlayers(g, Object.assign({ t: 'chat', gid: g.id }, msg));
+      const other = g.w === pid ? g.b : g.w, cm = Object.assign({ t: 'chat', gid: g.id }, msg);
+      if (blockedEither(pid, other)) return sendP(pid, cm);
+      return toPlayers(g, cm);
     }
     case 'rematch': {
       const g = games.get(m.gid);
@@ -842,6 +877,7 @@ async function handle(ws, m) {
       const t = tid && P(tid);
       if (!t || t.guest) return send(ws, { t: 'error', msg: 'No player with that username.' });
       if (t.id === pid || p.friends.includes(t.id)) return;
+      if (blockedEither(pid, t.id)) return send(ws, { t: 'error', msg: 'You cannot add this player.' });
       if (p.reqIn.includes(t.id)) { // they already asked: accept
         p.reqIn = p.reqIn.filter(x => x !== t.id); t.reqOut = t.reqOut.filter(x => x !== pid);
         p.friends.push(t.id); t.friends.push(pid); checkAch(p); checkAch(t);
@@ -887,6 +923,7 @@ async function handle(ws, m) {
       const o = P(m.to); if (!o || o.id === pid) return;
       if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to send messages.' });
       if (!p.friends.includes(o.id)) return send(ws, { t: 'error', msg: 'You can message friends only.' });
+      if (blockedEither(pid, o.id)) return send(ws, { t: 'error', msg: 'You cannot message this player.' });
       if (isMuted(p)) return send(ws, { t: 'error', msg: 'Messages are turned off for your account.' });
       const t = Date.now(); if (t - (ws.lastDm || 0) < 500) return; ws.lastDm = t;
       let text = String(m.text || '').replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 1000); if (!text) return;
@@ -916,6 +953,7 @@ async function handle(ws, m) {
       if (p.guest) return send(ws, { t: 'error', msg: 'Create an account to play daily games.' });
       { const why = canStart(p); if (why) return send(ws, { t: 'error', msg: why }); }
       const o = P(m.to); if (!o || o.guest || o.id === pid) return;
+      if (blockedEither(pid, o.id)) return send(ws, { t: 'error', msg: 'You cannot invite this player.' });
       if (dailyGamesOf(pid).filter(g => !g.over).length >= 20) return send(ws, { t: 'error', msg: 'You can have up to 20 daily games at once.' });
       const days = DAILY_DAYS.includes(+m.days) ? +m.days : 3, id = rid(4);
       db.dailyInvites[id] = { id, from: pid, to: o.id, days, color: ['w', 'b', 'r'].includes(m.color) ? m.color : 'r', ts: Date.now() }; save();
@@ -943,6 +981,53 @@ async function handle(ws, m) {
       const x = db.dailySeeks[m.id]; if (!x || x.by === pid || !P(x.by)) return send(ws, { t: 'error', msg: 'That game was already taken.' });
       delete db.dailySeeks[x.id]; save();
       return createDaily(x.by, pid, x.days, x.color);
+    }
+    /* ----- safety and privacy ----- */
+    case 'block': {
+      const t = P(m.id); if (!t || t.id === pid) return;
+      if (!p.blocked) p.blocked = []; if (!p.blocked.includes(t.id)) p.blocked.push(t.id);
+      p.friends = p.friends.filter(x => x !== t.id); t.friends = t.friends.filter(x => x !== pid);
+      p.reqIn = p.reqIn.filter(x => x !== t.id); p.reqOut = p.reqOut.filter(x => x !== t.id); t.reqIn = t.reqIn.filter(x => x !== pid); t.reqOut = t.reqOut.filter(x => x !== pid);
+      for (const [k, c] of challenges) if ((c.from === pid && c.to === t.id) || (c.to === pid && c.from === t.id)) challenges.delete(k);
+      for (const [k, x] of Object.entries(db.dailyInvites)) if ((x.from === pid && x.to === t.id) || (x.to === pid && x.from === t.id)) delete db.dailyInvites[k];
+      save(); sendP(pid, friendsPayload(p)); sendP(t.id, friendsPayload(t)); sendP(pid, { t: 'me', me: me(p) });
+      return send(ws, { t: 'info', msg: t.name + ' is blocked. They cannot message, challenge or invite you.' });
+    }
+    case 'unblock': { p.blocked = (p.blocked || []).filter(x => x !== m.id); save(); sendP(pid, { t: 'me', me: me(p) }); return send(ws, { t: 'info', msg: 'Unblocked' }); }
+    case 'report_player': {
+      const t = P(m.id); if (!t || t.id === pid) return;
+      if (rate('report:' + pid, 10, 3600e3)) return send(ws, { t: 'info', msg: 'Report sent. Thank you.' });
+      const c = db.dms[dmKey(pid, t.id)];
+      const chat = m.where === 'dm' && c ? c.msgs.slice(-30).map(x => ({ name: x.f === pid ? p.name : t.name, text: x.t })) : [];
+      db.reports.push({ id: rid(4), ts: Date.now(), by: pid, byName: p.name, who: t.id, whoName: t.name, gid: null,
+        reason: cleanText(m.reason, 60) || (m.where === 'dm' ? 'Private messages' : 'Profile'), note: cleanText(m.note, 300) || '', chat, open: true });
+      if (db.reports.length > 300) db.reports.shift();
+      save(); return send(ws, { t: 'info', msg: 'Report sent. Thank you.' });
+    }
+    case 'contact': {
+      if (rate('contact:' + (ws.ip || pid), 5, 3600e3)) return send(ws, { t: 'error', msg: 'You have sent several messages already. Please wait a while.' });
+      const text = String(m.text || '').replace(/[\u0000-\u0009\u000b-\u001f<>]/g, '').trim().slice(0, 3000);
+      if (text.length < 10) return send(ws, { t: 'error', msg: 'Please write a little more so we can help.' });
+      const kind = ['question', 'copyright', 'privacy', 'report', 'other'].includes(m.kind) ? m.kind : 'other';
+      if (!db.inbox) db.inbox = [];
+      db.inbox.push({ id: rid(4), ts: Date.now(), kind, email: cleanText(m.email, 120), text, pid, name: p.name, open: true });
+      if (db.inbox.length > 500) db.inbox.shift();
+      save(); log('[contact] ' + kind + ' message from ' + p.name);
+      return send(ws, { t: 'contact_ok' });
+    }
+    case 'export_data': {
+      if (rate('export:' + pid, 5, 3600e3)) return send(ws, { t: 'error', msg: 'Please wait a little before downloading again.' });
+      return send(ws, { t: 'export', data: playerData(p) });
+    }
+    case 'delete_account': {
+      if (p.guest) return send(ws, { t: 'error', msg: 'Guest data is removed automatically. There is no account to delete.' });
+      if (gameOf(pid)) return send(ws, { t: 'error', msg: 'Finish your current game first.' });
+      if (limited('del:' + (ws.ip || 'x'))) return send(ws, { t: 'error', msg: 'Too many attempts. Try again in 10 minutes.' });
+      if (!(await checkPw(String(m.password || ''), p.pass))) return send(ws, { t: 'error', msg: 'That password is not right.' });
+      log('[account] ' + p.name + ' deleted their account'); audit(ws.ip, 'account deleted by player', p.name);
+      leaveQueues(pid); cancelRooms(pid);
+      conns.get(pid) && conns.get(pid).forEach(w => send(w, { t: 'deleted' }));
+      removePlayer(p); return;
     }
     case 'search': {
       const q = String(m.q || '').trim().toLowerCase(); if (q.length < 2) return send(ws, { t: 'search', rows: [] });
@@ -1081,6 +1166,17 @@ function runBackup() {
   } catch (e) { db.backup.error = e.message; db.backup.lastTry = Date.now(); log('[backup] failed: ' + e.message); }
   save();
 }
+/* data retention: private messages for a year, network addresses for 90 days of inactivity, closed reports and contact messages for 180 days */
+function retention() {
+  const now = Date.now(); let n = 0;
+  for (const [k, c] of Object.entries(db.dms)) { const before = c.msgs.length; c.msgs = c.msgs.filter(x => now - x.ts < 365 * 864e5); n += before - c.msgs.length; if (!c.msgs.length) delete db.dms[k]; }
+  for (const p of Object.values(db.players)) if ((p.lastIp || (p.ips && p.ips.length)) && now - (p.seen || 0) > 90 * 864e5) { p.lastIp = null; p.ips = []; n++; }
+  db.reports = db.reports.filter(r => r.open || now - r.ts < 180 * 864e5);
+  if (db.inbox) db.inbox = db.inbox.filter(x => x.open || now - x.ts < 180 * 864e5);
+  db.audit = db.audit.filter(x => now - x.ts < 365 * 864e5);
+  if (n) { save(); log('[privacy] retention cleanup: ' + n + ' items'); }
+}
+setTimeout(retention, 30000); setInterval(retention, 12 * 3600e3);
 setInterval(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) { if (!db.backup.lastTry || Date.now() - db.backup.lastTry > 3600e3) runBackup(); } }, 10 * 60000);
 setTimeout(() => { if (!db.backup.last || Date.now() - db.backup.last > 24 * 3600e3) runBackup(); }, 30000);
 function overview(isMod) {
@@ -1100,7 +1196,7 @@ function overview(isMod) {
     audit: db.audit.slice(-80).reverse(), chat: chatLog.slice(-120).reverse(), activity: activity(),
     titles: all.filter(p => p.title).length, updater: updaterInfo(), backup: Object.assign({ folder: backupDir() }, db.backup),
     upt: uptimeSummary(), staff: all.filter(p => p.role).map(p => ({ id: p.id, name: p.name, role: p.role, online: online(p.id) })),
-    filter: db.filter, dailyCount: Object.values(db.daily).filter(g => !g.over).length, dmCount: Object.keys(db.dms).length, achList: ACH
+    inbox: isMod ? [] : (db.inbox || []).filter(x => x.open).slice(-100).reverse(), contactEmail: db.contactEmail || '', filter: db.filter, dailyCount: Object.values(db.daily).filter(g => !g.over).length, dmCount: Object.keys(db.dms).length, achList: ACH
   };
 }
 function updaterInfo() {
@@ -1223,6 +1319,14 @@ async function adminMore(route, req, res, b, ip, role, aud) {
   if (route === 'analytics') return json(res, 200, analytics());
   if (route === 'logs') return json(res, 200, { lines: logBuf.slice(-500) });
   if (route === 'backups') return json(res, 200, backupList());
+  if (route === 'inbox') { const x = (db.inbox || []).find(i => i.id === b.id); if (x) { x.open = false; save(); aud(ip, 'contact message done', x.kind); } return json(res, 200, { ok: true }); }
+  if (route === 'contactemail') {
+    if (!owner) return json(res, 403, { error: 'Only the owner can change this' });
+    const e = String(b.email || '').trim().slice(0, 120); if (e && !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(e)) return json(res, 400, { error: 'That does not look like an email address' });
+    db.contactEmail = e; save(); aud(ip, 'contact email', e || 'removed');
+    const m = JSON.stringify({ t: 'cfg', cfg: publicCfg() }); conns.forEach(st => st.forEach(ws => send(ws, m)));
+    return json(res, 200, { ok: true });
+  }
   if (route === 'gameedit') {
     const r = records.get(b.id); if (!r) return json(res, 404, { error: 'Game not found' });
     if (!['1-0', '0-1', '1/2-1/2'].includes(b.result)) return json(res, 400, { error: 'Pick a result' });
@@ -1394,13 +1498,7 @@ async function adminApi(req, res, route) {
       case 'clearhist': p.hist = []; sendP(p.id, { t: 'me', me: me(p) }); break;
       case 'kick': kick(p.id, 'You were disconnected by the server.'); break;
       case 'reset': p.ratings = newRatings(1200); p.hist = []; break;
-      case 'delete': {
-        if (online(p.id)) kick(p.id, 'Your account was removed.');
-        if (p.username) delete db.names[p.username.toLowerCase()];
-        Object.values(db.players).forEach(o => { ['friends', 'reqIn', 'reqOut'].forEach(k => { o[k] = o[k].filter(x => x !== p.id); }); });
-        for (const [t, s] of Object.entries(db.sessions)) if (s.pid === p.id) delete db.sessions[t];
-        delete db.players[p.id]; break;
-      }
+      case 'delete': { if (gameOf(p.id)) endGame(gameOf(p.id), 'aborted', 'aborted'); removePlayer(p); break; }
       default: return json(res, 400, { error: 'Unknown action' });
     }
     log('[admin] ' + b.action + ' ' + p.name); aud(ip, b.action, p.name + (b.reason ? ' (' + b.reason + ')' : '') + (b.value ? ' ' + (b.cat ? b.cat + '=' : 'all ratings ') + b.value : '') + (b.hours ? ' ' + b.hours + 'h' : '') + (b.role != null && b.action === 'role' ? ' ' + (b.role || 'player') : '') + (b.title ? ' ' + b.title : '')); save();
@@ -1470,7 +1568,14 @@ async function adminApi(req, res, route) {
   return await adminMore(route, req, res, b, ip, role, aud);
 }
 
+const SEC_HEADERS = {
+  'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'X-Frame-Options': 'DENY',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()', 'Cross-Origin-Opener-Policy': 'same-origin',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:; media-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+};
 const server = http.createServer(async (req, res) => {
+  for (const k in SEC_HEADERS) res.setHeader(k, SEC_HEADERS[k]);
+  if ((req.headers['x-forwarded-proto'] || '') === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   let p;
   try { p = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { res.writeHead(400); return res.end(); }
   try {

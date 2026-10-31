@@ -47,6 +47,6 @@ function tcParse(k){if(!k||k==='none')return {key:'none',base:0,inc:0,label:'No 
 function tcCat(k){if(!k||k==='none')return 'rapid';var a=k.split('+').map(Number),e=a[0]*60+a[1]*40;return e<180?'bullet':e<480?'blitz':'rapid';}
 var TINTS=['#5f7c66','#56718b','#8b4c45','#9a7b3f','#6c577e','#3f7b78','#776c60','#3e4b5d'];
 var BOARDS={walnut:{n:'Walnut',l:'#e7d6b8',d:'#a57d58'},sage:{n:'Sage',l:'#e4e5d6',d:'#83977a'},slate:{n:'Slate',l:'#dfe4e6',d:'#6f8796'},rosewood:{n:'Rosewood',l:'#ecd9cc',d:'#a76a5e'},graphite:{n:'Graphite',l:'#cbccc6',d:'#6a6f6b'},tournament:{n:'Tournament',l:'#eeeed2',d:'#769656'}};
-var SET_NAMES={staunty:'Staunty',gioco:'Gioco',tatiana:'Tatiana',maestro:'Maestro',cardinal:'Cardinal',royal:'Royal',cburnett:'Classic'};
+var SET_NAMES={staunty:'Staunty',papercut:'Papercut',gioco:'Gioco',tatiana:'Tatiana',maestro:'Maestro',cardinal:'Cardinal',chessnut:'Chessnut',mpchess:'Modern',merida:'Merida',royal:'Royal',cburnett:'Classic'};
 var CLS={brilliant:{l:'Brilliant',g:'!!',c:'#26a8b8'},great:{l:'Great',g:'!',c:'#5b8bd0'},best:{l:'Best',g:'★',c:'#69a84f'},excellent:{l:'Excellent',g:'✓',c:'#86b85c'},good:{l:'Good',g:'•',c:'#7d9b8a'},book:{l:'Book',g:'≡',c:'#a88b62'},inaccuracy:{l:'Inaccuracy',g:'?!',c:'#e0b43a'},mistake:{l:'Mistake',g:'?',c:'#e5863a'},miss:{l:'Miss',g:'✕',c:'#d86a5b'},blunder:{l:'Blunder',g:'??',c:'#d2463a'}};
 var CLS_ORDER=['brilliant','great','best','excellent','good','book','inaccuracy','mistake','miss','blunder'];

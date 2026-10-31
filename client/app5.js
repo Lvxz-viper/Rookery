@@ -477,5 +477,4 @@ var _onAct=onAct;onAct=function(e){
 /* ---------- start ---------- */
 (function(){var h=location.hash.slice(1);if(h==='daily'){setup.tab='daily';try{history.replaceState(null,'',location.pathname+location.search+'#play');}catch(e){}}
   SS.learn=learnSession();})();
-boot();
 if(ONLINE)setInterval(function(){if(NET.ok&&isAccount()&&(route==='home'||(route==='play'&&SS.play.setup&&setup.tab==='daily')))netSend({t:'daily_list'});},60000);

@@ -110,7 +110,7 @@ function prefsPage(){
     '<div class="stack">'+(ONLINE?'':'<section class="blk"><h2>Your name</h2><div class="card"><input id="nameIn" maxlength="20" value="'+esc(settings.name)+'" autocomplete="off" aria-label="Display name"></div></section>')+
     '<section class="blk"><h2>About Rookery</h2><div class="card" style="display:grid;gap:10px"><p class="note">Engine: '+engineName()+'. '+(ONLINE?'Version 3.0, running on your own server.':'Offline edition.')+'</p>'+
     '<p class="fine">Keyboard: ← and → step through moves, F flips the board. Right-click and drag to draw arrows.</p>'+
-    '<p class="fine">Stockfish 18 by the Stockfish developers, WASM build by Chess.com (GPLv3). Piece sets from the Lichess project: Staunty, Gioco, Tatiana, Maestro and Cardinal by sadsnake1 (CC BY-NC-SA 4.0, free for non-commercial use), Royal is a recolor of Celtic by Maurizio Monge (MIT), Classic by Colin M.L. Burnett (GPLv2+). Puzzles from the Lichess puzzle database (CC0).</p></div></section></div></div>';}
+    '<p class="fine"><a href="#licenses">Licenses and credits</a> · <a href="#terms">Terms</a> · <a href="#privacy">Privacy</a></p></div></section></div></div>';}
 
 /* ---------- modals ---------- */
 function authModal(mode){
@@ -226,7 +226,7 @@ function onAct(e){
    case 'set':settings[k]=!settings[k];saveAll();if(k==='coords')board.buildCoords();applyTheme();renderPage();break;
   }}
 function onSubmit(form){var f=form.dataset.form;
-  if(f==='signup'||f==='login'){var u=$('#authU').value.trim(),p=$('#authP').value;form.querySelector('.err').textContent='';form.querySelector('button[type=submit]').disabled=true;if(!netSend({t:f,username:u,password:p}))form.querySelector('button[type=submit]').disabled=false;}
+  if(f==='signup'||f==='login'){var u=$('#authU').value.trim(),p=$('#authP').value;form.querySelector('.err').textContent='';form.querySelector('button[type=submit]').disabled=true;if(!netSend({t:f,username:u,password:p,agree:f==='signup'?!!($('#authAgree')&&$('#authAgree').checked):undefined}))form.querySelector('button[type=submit]').disabled=false;}
   else if(f==='password'){netSend({t:'password',old:$('#pwOld').value,password:$('#pwNew').value});closeModal();}
   else if(f==='addfriend'){var n=$('#friendIn').value.trim();if(n){netSend({t:'friend_add',username:n});$('#friendIn').value='';}}
   else if(f==='search'){var q=$('#searchIn').value.trim();if(q.length>=2)netSend({t:'search',q:q});}}
